@@ -1,0 +1,18 @@
+[package]
+name = "vibrev-tool-macros"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Derives MCP tool definitions and a clap command tree from a single source"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# syn 3 + darling 0.24 to match rmcp-macros 3.1.2 — a second syn in the graph makes
+# darling's errors incompatible with ours.
+syn = { version = "3", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+darling = "0.24"

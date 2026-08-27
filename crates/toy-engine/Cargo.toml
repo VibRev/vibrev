@@ -1,0 +1,26 @@
+[package]
+name = "toy-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Proves one tool definition drives both the MCP surface and the CLI"
+
+[dependencies]
+vibrev-kit.workspace = true
+vibrev-skills.workspace = true
+vibrev-tool-macros.workspace = true
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+
+[build-dependencies]
+# `default-features = false`: a build script calls `pack` and nothing else, so
+# it compiles flate2 for the host and skips clap, serde and anyhow entirely.
+# Spelled by path rather than inherited, because cargo refuses to let a member
+# turn off default features on a workspace dependency.
+vibrev-skills = { path = "../vibrev-skills", default-features = false }

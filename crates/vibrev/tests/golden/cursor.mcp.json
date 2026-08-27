@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"]
+    },
+    "vibrev-ida": {
+      "command": "<SANDBOX>/home/.vibrev/engines/ida-headless-mcp",
+      "args": []
+    },
+    "vibrev-jadx": {
+      "command": "<SANDBOX>/home/.vibrev/engines/rjadx",
+      "args": ["mcp", "--stdio"]
+    }
+  }
+}

@@ -1,0 +1,30 @@
+[package]
+name = "vibrev-skills"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Agent skills compiled into a VibRev engine: the archive format, the packer, and the CLI both sides agree on"
+
+[dependencies]
+# The archive itself. Needed by both halves, so it is never behind a feature —
+# the writer and the reader must be the same code.
+flate2 = "1"
+
+# The `runtime` half only. A build script calls `pack` and nothing else, so it
+# takes this crate with `default-features = false` and compiles none of these
+# for the host.
+clap = { workspace = true, features = ["derive"], optional = true }
+serde = { workspace = true, optional = true }
+# Deliberately *not* `.workspace = true`, for the reason `vibrev-kit` states at
+# length: the workspace entry turns on `preserve_order`, cargo unifies features
+# across a build graph, and an engine that depends on this crate would have the
+# key order of every JSON payload it emits changed as a side effect.
+serde_json = { version = "1", optional = true }
+anyhow = { workspace = true, optional = true }
+
+[features]
+default = ["runtime"]
+# Everything an engine binary and the installer need: the reader, the wire
+# type, and the `skills list` / `skills export` command.
+runtime = ["dep:clap", "dep:serde", "dep:serde_json", "dep:anyhow"]

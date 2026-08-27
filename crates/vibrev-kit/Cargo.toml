@@ -1,0 +1,61 @@
+[package]
+name = "vibrev-kit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared runtime for VibRev engines: CLI construction, argument mapping, output rendering"
+
+[dependencies]
+rmcp.workspace = true
+clap.workspace = true
+# Deliberately *not* `.workspace = true`: the workspace entry turns on
+# `preserve_order`, and cargo unifies features across a whole build graph. An
+# engine that adds this kit as a path dependency would silently have its own
+# `serde_json::Map` swapped from BTreeMap to IndexMap — which reorders the keys
+# of every JSON payload it emits. A shared crate must not change its consumer's
+# wire format as a side effect of being depended on.
+serde_json = "1"
+serde.workspace = true
+schemars.workspace = true
+# `time` for the readiness wait (see `session`); `fs`, `sync` and `io-util` for
+# `output`, which writes a spilled answer to a private file and guards its
+# index. rmcp already pulls tokio in, so this adds nothing to the graph.
+tokio = { version = "1", features = ["time", "fs", "sync", "io-util"] }
+# `v4` only, for `token`: two v4 UUIDs are the token's 244 bits, and one more
+# names the staging file a rotation renames into place. Both engines and the
+# installer already carried this dependency for exactly this reason.
+uuid = { version = "1", features = ["v4"] }
+# `output` only, for its two error variants.
+thiserror = "2"
+# `tasks` only, for `CancellationToken`. Cancellation there is cooperative on
+# purpose — aborting a `JoinHandle` cannot interrupt a native call into a
+# disassembler — so the token is the whole mechanism, not a convenience.
+tokio-util = "0.7"
+
+# `transport` only. Behind a feature because an engine that speaks stdio — and
+# the installer, which speaks no protocol at all — should not compile axum to
+# get `schema` and `policy`. The engines that open a listener turn it on.
+axum = { version = "0.8", default-features = false, features = [
+    "http1",
+    "json",
+    "tokio",
+], optional = true }
+bytes = { version = "1", optional = true }
+http = { version = "1", optional = true }
+http-body-util = { version = "0.1", optional = true }
+
+[features]
+default = []
+http = [
+    "dep:axum",
+    "dep:bytes",
+    "dep:http",
+    "dep:http-body-util",
+    "rmcp/transport-streamable-http-server",
+    "tokio/net",
+    "tokio/signal",
+]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["time", "macros", "rt"] }

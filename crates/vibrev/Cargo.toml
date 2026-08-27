@@ -1,0 +1,43 @@
+[package]
+name = "vibrev"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "VibRev installer and dispatcher: discovers engine binaries and execs into their CLIs"
+
+[[bin]]
+name = "vibrev"
+path = "src/main.rs"
+
+[dependencies]
+# Feature additions on top of the workspace entries; the root table is untouched.
+clap = { workspace = true, features = ["derive", "env", "wrap_help"] }
+tokio = { workspace = true, features = ["process", "time"] }
+# `client` + `transport-child-process` are what turn rmcp into the initialize
+# handshake we probe engines with — identity comes from MCP, not --version.
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+# Not an engine, but it writes a file the engines read. `vibrev_kit::token` is
+# the format both sides open; see that module's header for why it is shared
+# rather than described in a comment.
+vibrev-kit.workspace = true
+# Same rule, the other direction: `skills list --json` is a document an engine
+# writes and this program reads, so both ends name one type.
+vibrev-skills.workspace = true
+
+toml.workspace = true
+etcetera.workspace = true
+which.workspace = true
+camino.workspace = true
+comfy-table.workspace = true
+owo-colors.workspace = true
+
+# Client config files are user-owned and concurrently written by the clients
+# themselves, hence: format-preserving parsers, atomic replace, advisory locks.
+jsonc-parser.workspace = true
+toml_edit.workspace = true
+tempfile.workspace = true
+fs4.workspace = true

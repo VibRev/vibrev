@@ -1,0 +1,28 @@
+{
+  // MCP servers for this profile. Edited by hand — keep the comments!
+  "inputs": [
+    {
+      "id": "gh-token",
+      "type": "promptString",
+      "description": "GitHub PAT", // never inline the secret
+      "password": true
+    }
+  ],
+  "servers": {
+    /* Fetches web pages. */
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "vibrev-ida": {
+      "type": "stdio",
+      "command": "<SANDBOX>/home/.vibrev/engines/ida-headless-mcp",
+      "args": []
+    },
+    "vibrev-jadx": {
+      "type": "stdio",
+      "command": "<SANDBOX>/home/.vibrev/engines/rjadx",
+      "args": ["mcp", "--stdio"]
+    }
+  }
+}

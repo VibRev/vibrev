@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+rmcp = { version = "3.1.2", features = ["server", "macros", "transport-io", "schemars"] }
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+clap = { version = "4.6", features = ["string"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std"] }
+anyhow = "1"
+
+# vibrev bin only (installer / dispatcher). etcetera is pinned to 0.11 on purpose:
+# 0.12 raises the MSRV past our 1.95 floor.
+toml = "0.9"
+etcetera = "0.11"
+which = "8.0"
+camino = "1.2"
+comfy-table = "7.2"
+owo-colors = { version = "4.3", features = ["supports-colors"] }
+
+# vibrev bin only (install / uninstall). Client config files belong to the user
+# and to other tools, so every writer here is format-preserving: a round-trip
+# through serde_json would silently delete the comments in VS Code's mcp.json.
+jsonc-parser = { version = "0.33", features = ["cst", "serde", "preserve_order"] }
+toml_edit = { version = "0.25", features = ["serde"] }
+tempfile = "3.27"
+fs4 = { version = "1.1", features = ["sync"] }
+
+vibrev-kit = { path = "crates/vibrev-kit" }
+vibrev-skills = { path = "crates/vibrev-skills" }
+vibrev-tool-macros = { path = "crates/vibrev-tool-macros" }

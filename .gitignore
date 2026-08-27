@@ -1,0 +1,6 @@
+/target/
+
+# Scratch directories the integration tests build under target/, listed here so
+# that a stray one outside target/ never lands in a commit.
+vibrev-test-scratch/
+verify-home.*/

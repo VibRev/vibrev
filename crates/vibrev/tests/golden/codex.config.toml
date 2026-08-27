@@ -1,0 +1,19 @@
+model = "o3"
+approval_policy = "on-request"
+
+# The user's own provider block.
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+
+[mcp_servers.other]
+command = "npx"
+args = ["-y", "some-other-server"]
+
+[mcp_servers.vibrev-ida]
+command = "<SANDBOX>/home/.vibrev/engines/ida-headless-mcp"
+args = []
+
+[mcp_servers.vibrev-jadx]
+command = "<SANDBOX>/home/.vibrev/engines/rjadx"
+args = ["mcp", "--stdio"]

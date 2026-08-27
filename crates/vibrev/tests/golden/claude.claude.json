@@ -1,0 +1,25 @@
+{
+  "numStartups": 17,
+  "theme": "dark",
+  "mcpServers": {
+    "sentry": {
+      "type": "http",
+      "url": "https://mcp.sentry.dev/mcp"
+    },
+    "vibrev-ida": {
+      "type": "stdio",
+      "command": "<SANDBOX>/home/.vibrev/engines/ida-headless-mcp",
+      "args": []
+    },
+    "vibrev-jadx": {
+      "type": "stdio",
+      "command": "<SANDBOX>/home/.vibrev/engines/rjadx",
+      "args": ["mcp", "--stdio"]
+    }
+  },
+  "projects": {
+    "/work/somewhere": {
+      "allowedTools": []
+    }
+  }
+}
