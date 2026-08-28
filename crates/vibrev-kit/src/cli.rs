@@ -293,7 +293,7 @@ fn tool_tree(
     }
 
     let mut root = Command::new(TOOL_COMMAND)
-        .about("调用引擎工具（每个工具一个子命令）")
+        .about("Invoke an engine tool (one subcommand per tool)")
         .subcommand_required(true)
         .arg_required_else_help(true);
     if let Some(spec) = session {
@@ -480,14 +480,14 @@ fn subcommand(d: &ToolDef, leaf: &str, session: Option<&'static SessionSpec>) ->
         let mut notes = Vec::new();
         if !opaque.is_empty() {
             notes.push(format!(
-                "参数 {} 结构过于复杂，无法映射为命令行选项，请改用 --json-input",
+                "parameter {} is too structured to map onto a flag; use --json-input",
                 opaque.join(", ")
             ));
         }
         if !degraded.is_empty() {
             notes.push(format!(
-                "参数 {} 的 schema 没有声明类型：命令行只能按单个字符串原样传递，不做任何校验；\
-                 若该参数在 MCP 面接受数组，命令行给不了，请改用 --json-input",
+                "parameter {} has no declared type: the CLI passes a single string as-is, with no validation; \
+                 if the MCP surface accepts an array, the CLI cannot, so use --json-input",
                 degraded.join(", ")
             ));
         }
@@ -496,16 +496,16 @@ fn subcommand(d: &ToolDef, leaf: &str, session: Option<&'static SessionSpec>) ->
                 Arg::new("__json_input")
                     .long("json-input")
                     .value_name("FILE")
-                    .help("从文件读取完整 JSON 参数（'-' 表示 stdin）"),
+                    .help("Read the full JSON arguments from a file ('-' for stdin)"),
             )
-            .after_help(format!("注意：{}", notes.join("\n      ")));
+            .after_help(format!("Note: {}", notes.join("\n      ")));
     }
 
     cmd.arg(
         Arg::new("__json")
             .long("json")
             .action(ArgAction::SetTrue)
-            .help("以 JSON 输出结果"),
+            .help("Print the result as JSON"),
     )
 }
 
@@ -725,8 +725,7 @@ impl Shape {
 /// real capability gap, not a display problem, and `--json-input` is an escape
 /// hatch rather than parity. `after_help` alone is below the fold; this rides on
 /// the flag itself.
-const DEGRADED_NOTE: &str =
-    "[未校验：schema 未声明类型，按单个字符串原样传递；若该参数接受数组，请改用 --json-input]";
+const DEGRADED_NOTE: &str = "[unvalidated: schema declared no type, passed as a single string as-is; if this parameter accepts an array, use --json-input]";
 
 fn push_note(help: &mut String, note: &str) {
     if !help.is_empty() {
@@ -737,9 +736,9 @@ fn push_note(help: &mut String, note: &str) {
 
 fn range_note(min: Option<i64>, max: Option<i64>) -> Option<String> {
     match (min, max) {
-        (Some(lo), Some(hi)) => Some(format!("[范围 {lo}..={hi}]")),
-        (Some(lo), None) => Some(format!("[最小 {lo}]")),
-        (None, Some(hi)) => Some(format!("[最大 {hi}]")),
+        (Some(lo), Some(hi)) => Some(format!("[range {lo}..={hi}]")),
+        (Some(lo), None) => Some(format!("[min {lo}]")),
+        (None, Some(hi)) => Some(format!("[max {hi}]")),
         (None, None) => None,
     }
 }
@@ -935,7 +934,7 @@ fn coerce(raw: &str, shape: &Shape, d: &ToolDef, name: &str) -> Result<Value, St
             // decimal only, and addresses in this domain are written `0x…`.
             if min.is_some_and(|lo| n < lo) || max.is_some_and(|hi| n > hi) {
                 return Err(format!(
-                    "--{flag}: {n} 超出 schema 声明的范围 {}",
+                    "--{flag}: {n} is outside the schema-declared range {}",
                     range_note(*min, *max).unwrap_or_default()
                 ));
             }
@@ -1595,7 +1594,7 @@ mod tests {
             .and_then(|a| a.get_help().map(ToString::to_string))
             .expect("the flag is registered and has help");
         assert!(help.contains("Address(es)"), "{help}");
-        assert!(help.contains("未校验"), "{help}");
+        assert!(help.contains("unvalidated"), "{help}");
         assert!(help.contains("--json-input"), "{help}");
 
         // And the escape hatch really is there, so the note is actionable.

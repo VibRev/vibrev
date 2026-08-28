@@ -180,14 +180,14 @@ impl HttpOptions {
                 .value_name("ADDR")
                 .default_value(DEFAULT_BIND)
                 .value_parser(clap::value_parser!(SocketAddr))
-                .help("监听地址。默认回环；改成非回环等于把这个端口暴露给同网段"),
+                .help("Listen address. Loopback by default; a non-loopback bind exposes this port to the local network"),
             Arg::new(TOKEN_FILE_ARG)
                 .long("token-file")
                 .value_name("PATH")
                 .value_parser(clap::value_parser!(PathBuf))
                 .help(
-                    "共享 bearer token 文件。默认 $VIBREV_HOME/token，否则 ~/.vibrev/token；\
-                     首次使用时以 0600 创建并被之后每次运行复用。没有关掉 token 的开关",
+                    "Shared bearer token file. Defaults to $VIBREV_HOME/token, otherwise ~/.vibrev/token; \
+                     created at mode 0600 on first use and reused thereafter. There is no switch that turns the token off",
                 ),
             Arg::new(ALLOW_ORIGIN_ARG)
                 .long("allow-origin")
@@ -195,47 +195,47 @@ impl HttpOptions {
                 .value_delimiter(',')
                 .action(ArgAction::Append)
                 .default_value(DEFAULT_ALLOW_ORIGIN)
-                .help("允许的 Origin（逗号分隔）。默认只有 localhost"),
+                .help("Allowed Origin values (comma-separated). localhost only by default"),
             Arg::new(ALLOW_HOST_ARG)
                 .long("allow-host")
                 .value_name("HOST")
                 .value_delimiter(',')
                 .action(ArgAction::Append)
                 .help(
-                    "额外允许的 Host 头（逗号分隔）。--bind 能到达的 IP 字面量自动允许，\
-                     这里填 DNS 名。给 '*' 或空串会关掉 Host 校验，也就关掉 DNS 重绑定防护",
+                    "Additional allowed Host headers (comma-separated). IP literals that --bind can reach are allowed automatically; \
+                     put DNS names here. '*' or an empty string disables the Host check, and with it DNS-rebinding protection",
                 ),
             Arg::new(SSE_KEEP_ALIVE_ARG)
                 .long("sse-keep-alive-secs")
                 .value_name("SECS")
                 .default_value(DEFAULT_SSE_KEEP_ALIVE_SECS.to_string())
                 .value_parser(clap::value_parser!(u64))
-                .help("SSE 心跳间隔秒数，0 关闭"),
+                .help("SSE keep-alive interval in seconds; 0 disables it"),
             Arg::new(SESSION_KEEP_ALIVE_ARG)
                 .long("session-keep-alive-secs")
                 .value_name("SECS")
                 .default_value(DEFAULT_SESSION_KEEP_ALIVE_SECS.to_string())
                 .value_parser(clap::value_parser!(u64))
                 .help(
-                    "HTTP 会话闲置超时秒数。0 关闭，但连接静默断开时会留下僵尸会话，\
-                     宁可给一个宽裕的正值",
+                    "HTTP session idle timeout in seconds. 0 disables it, but a silently dropped connection then leaves a zombie session; \
+                     a generous positive value is safer",
                 ),
             Arg::new(STATELESS_ARG)
                 .long("stateless")
                 .action(ArgAction::SetTrue)
-                .help("无状态模式（只接受 POST，不建会话）"),
+                .help("Stateless mode (POST only, no sessions)"),
             Arg::new(JSON_RESPONSE_ARG)
                 .long("json-response")
                 .action(ArgAction::SetTrue)
-                .help("无会话派发时返回 application/json 而不是 SSE 帧"),
+                .help("Return application/json instead of SSE frames when dispatching without a session"),
             Arg::new(MAX_REQUEST_BODY_ARG)
                 .long("max-request-body-mib")
                 .value_name("MIB")
                 .default_value(DEFAULT_MAX_REQUEST_BODY_MIB.to_string())
                 .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(1..=1024))
                 .help(
-                    "请求体上限（MiB）。这段缓冲在鉴权之前就被撑大，未认证的调用方也能占住它，\
-                     调高要有意为之",
+                    "Request body cap in MiB. This buffer is allocated before auth, so an unauthenticated caller can fill it; \
+                     raise it on purpose",
                 ),
         ]
     }
@@ -786,7 +786,10 @@ mod tests {
         // and fails under `--workspace`, at whatever width the terminal happens
         // to be.
         let flattened = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(flattened.contains("没有关掉 token 的开关"), "{rendered}");
+        assert!(
+            flattened.contains("no switch that turns the token off"),
+            "{rendered}"
+        );
     }
 
     #[test]

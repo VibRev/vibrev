@@ -149,7 +149,7 @@ fn render_object(map: &Map<String, Value>) -> String {
 
 fn render_array(items: &[Value]) -> String {
     if items.is_empty() {
-        return "(空)".to_owned();
+        return "(empty)".to_owned();
     }
     let rows: Vec<&Map<String, Value>> = items.iter().filter_map(Value::as_object).collect();
     if rows.len() != items.len() {

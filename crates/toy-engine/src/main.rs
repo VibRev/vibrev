@@ -353,7 +353,7 @@ fn cli_command() -> clap::Command {
         .with_management(MANAGEMENT_COMMANDS)
         .command()
         .about("VibRev reference engine")
-        .subcommand(clap::Command::new("mcp").about("以 stdio 运行 MCP server"))
+        .subcommand(clap::Command::new("mcp").about("Run the MCP server over stdio"))
         // Built with clap's builder API rather than named in a derived enum:
         // this engine has no `#[derive(Subcommand)]` tree to name it in. Both
         // spellings reach the same derived type in `vibrev-skills`.

@@ -135,7 +135,7 @@ pub struct MissingSession {
 
 impl fmt::Display for MissingSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "需要 --{} —— {}", self.flag, self.message)
+        write!(f, "need --{} — {}", self.flag, self.message)
     }
 }
 

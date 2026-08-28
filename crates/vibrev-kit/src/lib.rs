@@ -78,18 +78,18 @@ impl ToolOutcome {
         match response {
             CallToolResponse::Complete(result) => Ok(Self::from_result(result)),
             CallToolResponse::InputRequired(_) => Err(ErrorData::internal_error(
-                "该工具要求交互式输入（elicitation），CLI 无法应答；请通过 MCP 前端调用",
+                "this tool requires interactive input (elicitation), which the CLI cannot answer; call it from an MCP client",
                 None,
             )),
             CallToolResponse::Task(_) => Err(ErrorData::internal_error(
-                "该工具返回了后台任务句柄，CLI 无法轮询；请通过 MCP 前端调用",
+                "this tool returned a background task handle, which the CLI cannot poll; call it from an MCP client",
                 None,
             )),
             // `CallToolResponse` is #[non_exhaustive]; a response shape rmcp adds
             // later is one this CLI has never rendered, so say so rather than
             // guess at a text form for it.
             other => Err(ErrorData::internal_error(
-                format!("CLI 无法渲染这种工具响应：{other:?}"),
+                format!("the CLI cannot render this tool response: {other:?}"),
                 None,
             )),
         }

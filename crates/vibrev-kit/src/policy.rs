@@ -470,24 +470,24 @@ impl PolicyArgs {
                 .global(true)
                 .action(ArgAction::Append)
                 .value_name("CATEGORY")
-                .help("只暴露这些分类的工具（逗号分隔或重复给出）。给了就是收窄，不是在「全部」上追加"),
+                .help("Only expose tools in these categories (comma-separated or repeated). Naming any is a narrowing, not an addition to 'all'"),
             Arg::new(TOOLS_ARG)
                 .long("tools")
                 .global(true)
                 .action(ArgAction::Append)
                 .value_name("TOOL")
-                .help("额外暴露这些工具，叠加在 --toolsets 之上"),
+                .help("Also expose these tools, on top of --toolsets"),
             Arg::new(EXCLUDE_TOOLS_ARG)
                 .long("exclude-tools")
                 .global(true)
                 .action(ArgAction::Append)
                 .value_name("TOOL")
-                .help("排除这些工具。排除永远压过包含"),
+                .help("Exclude these tools. Exclusion always wins over inclusion"),
             Arg::new(READ_ONLY_ARG)
                 .long("read-only")
                 .global(true)
                 .action(ArgAction::SetTrue)
-                .help("只暴露不改动目标的工具。依据是每个工具自己声明的 readOnlyHint，不是手维护的名单"),
+                .help("Only expose tools that do not mutate the target. Driven by each tool's own readOnlyHint, not a hand-kept list"),
         ]
     }
 
