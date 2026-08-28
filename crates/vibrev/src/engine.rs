@@ -36,10 +36,13 @@ pub const ENGINES: &[Engine] = &[
         id: "ida",
         bin: "ida-headless-mcp",
         about: "IDA Pro",
-        // No subcommand is the documented default and maps to `serve` (the
-        // multi-database supervisor), which does not initialize idalib until a
-        // database is opened — the cheapest thing to hand a handshake probe.
-        mcp_args: &[],
+        // The transport has to be named: this engine's `serve` defaults to
+        // HTTP, so a bare invocation would bind a port and never read the pipe
+        // — the probe below and every config written from these args speak
+        // stdio. `serve` is the multi-database supervisor, which does not
+        // initialize idalib until a database is opened, so it stays the
+        // cheapest thing to hand a handshake probe.
+        mcp_args: &["serve", "--mode", "stdio"],
         // `skills list` answers out of data compiled into the binary: no
         // database, no license, no IDA installation.
         skills_args: &["skills", "list"],
@@ -67,6 +70,10 @@ pub const ENGINES: &[Engine] = &[
         id: "bn",
         bin: "bn-headless-mcp",
         about: "Binary Ninja",
+        // Still stdio on a bare invocation. This used to be the shared
+        // assumption behind both engines; ida has since moved and says so
+        // above, so state it here rather than leave the empty slice to imply
+        // a default that is now engine-specific.
         mcp_args: &[],
         // No skill vendored yet. The channel is engine-agnostic, so this becomes
         // `&["skills", "list"]` the day `bn-headless-mcp` grows a `skills/`.

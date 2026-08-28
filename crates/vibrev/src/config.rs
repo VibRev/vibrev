@@ -65,7 +65,7 @@ impl Paths {
 /// ```toml
 /// [engines.ida]
 /// path = "~/build/ida-headless-mcp"
-/// mcp_args = ["serve"]
+/// mcp_args = ["serve", "--mode", "stdio"]
 /// ```
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct Config {
@@ -146,7 +146,7 @@ mod tests {
             r#"
             [engines.ida]
             path = "~/build/ida-headless-mcp"
-            mcp_args = ["serve"]
+            mcp_args = ["serve", "--mode", "stdio"]
 
             [engines.jadx]
             path = "/usr/bin/rjadx"
@@ -155,7 +155,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             cfg.engines["ida"].mcp_args.as_deref(),
-            Some(&["serve".to_owned()][..])
+            Some(&["serve".to_owned(), "--mode".to_owned(), "stdio".to_owned()][..])
         );
         assert!(cfg.engines["jadx"].mcp_args.is_none());
     }

@@ -6,7 +6,7 @@
     },
     "vibrev-ida": {
       "command": "<SANDBOX>/home/.vibrev/engines/ida-headless-mcp",
-      "args": []
+      "args": ["serve", "--mode", "stdio"]
     },
     "vibrev-jadx": {
       "command": "<SANDBOX>/home/.vibrev/engines/rjadx",
