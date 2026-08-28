@@ -11,8 +11,10 @@ command = "npx"
 args = ["-y", "some-other-server"]
 
 [mcp_servers.vibrev-ida]
-command = "<SANDBOX>/home/.vibrev/engines/ida-headless-mcp"
-args = ["serve", "--mode", "stdio"]
+url = "http://127.0.0.1:8765/mcp"
+
+[mcp_servers.vibrev-ida.http_headers]
+Authorization = "Bearer vbr_GOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN"
 
 [mcp_servers.vibrev-jadx]
 command = "<SANDBOX>/home/.vibrev/engines/rjadx"

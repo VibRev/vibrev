@@ -68,11 +68,23 @@ The root is `~/.vibrev`, overridable with `VIBREV_HOME`. The installer and the e
 
 Edits are **format-preserving**: a `serde_json` round-trip would delete every comment in VS Code's `mcp.json`, so the JSONC and TOML paths go through `jsonc-parser` and `toml_edit` instead. Writes are atomic (temp file + rename) under an advisory lock, with a one-time `.bak` at mode 0600.
 
-The entry written is a plain stdio entry pointing straight at the engine — `vibrev` is not on the command line and not in the request path:
+IDA and BN `serve` default to HTTP, so `install` writes a URL the operator's own process is expected to answer. The bearer is copied from `~/.vibrev/token` into **global** client configs only (project-scope files are committed):
+
+```jsonc
+"vibrev-ida": {
+  "type": "http",
+  "url": "http://127.0.0.1:8765/mcp",
+  "headers": { "Authorization": "Bearer vbr_…" }
+}
+```
+
+jadx has no listener, so it stays a stdio spawn:
 
 ```jsonc
 "vibrev-jadx": { "command": "~/.vibrev/engines/rjadx", "args": ["mcp", "--stdio"] }
 ```
+
+Start the HTTP engines yourself (`ida-headless-mcp` / `bn-headless-mcp`); they bind `127.0.0.1:8765` unless told otherwise.
 
 Two flags are worth knowing:
 

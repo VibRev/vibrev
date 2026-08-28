@@ -1,22 +1,27 @@
 //! `vibrev install` / `uninstall` / `list` — registering engines with MCP clients.
 //!
-//! What gets written is a plain stdio entry pointing straight at the engine
-//! binary, one per engine:
+//! What gets written depends on the engine. IDA and BN `serve` default to HTTP,
+//! so their entry is a URL the operator's own process is expected to answer:
+//!
+//! ```jsonc
+//! "vibrev-ida": {
+//!   "type": "http",
+//!   "url": "http://127.0.0.1:8765/mcp",
+//!   "headers": { "Authorization": "Bearer vbr_…" }
+//! }
+//! ```
+//!
+//! jadx has no listener, so it stays a stdio spawn:
 //!
 //! ```jsonc
 //! "vibrev-jadx": { "command": "~/.vibrev/engines/rjadx", "args": ["mcp", "--stdio"] }
 //! ```
 //!
-//! `vibrev` is not in that command line, and there is no daemon, URL or token —
-//! the client spawns the engine itself, and one entry per engine is what lets a
-//! user turn `vibrev-ida` off in their client without losing `vibrev-jadx`.
-//!
-//! Because we only ever *write* stdio, we also *remove* the other transport's
-//! keys from an entry we own (`mcpfile::HTTP_TRANSPORT_KEYS`). That is a security
-//! rule before it is a tidiness one: `headers` is where the bearer token lives,
-//! and project scope writes files that get committed. Deleting a token that has
-//! already been committed does not un-leak it, so the removal is reported and
-//! rotation is demanded rather than assumed — see [`credential_warning`].
+//! One entry per engine is what lets a user turn `vibrev-ida` off in their client
+//! without losing `vibrev-jadx`. The bearer lives in `~/.vibrev/token` and is
+//! copied into **global** HTTP entries only. Project-scope files are committed;
+//! writing a token there would leak it, so those entries get the URL and not the
+//! header — see [`credential_warning`].
 //!
 //! Two write paths. Both are supported and both are tested, but they are not
 //! equals — the direct write is the default:
@@ -142,10 +147,10 @@ struct Change {
     server: String,
     engine: &'static str,
     op: Op,
-    /// The entry we are about to write held an `Authorization` header, which the
-    /// upsert strips (`mcpfile::HTTP_TRANSPORT_KEYS`). Recorded because the strip
-    /// is not the whole story: in a version-controlled file the token is already
-    /// in history and has to be rotated, not just deleted.
+    /// The entry we are about to write held an `Authorization` header that this
+    /// write will not put back. Recorded because deleting it from a
+    /// version-controlled file is not the whole story: the token is already in
+    /// history and has to be rotated, not just deleted.
     stripped_credentials: bool,
     /// The literal secret values found in this entry, masked out of the preview.
     secrets: Vec<String>,
@@ -452,12 +457,7 @@ fn resolve_engines(opts: &Options, cfg: &Config, paths: &Paths) -> Result<Vec<Re
             .into_iter()
             .map(|e| Resolved {
                 engine: e,
-                spec: ServerSpec {
-                    name: client::server_name(e.id),
-                    engine: e.id,
-                    command: String::new(),
-                    args: Vec::new(),
-                },
+                spec: ServerSpec::named(e),
                 located: None,
             })
             .collect());
@@ -477,7 +477,7 @@ fn resolve_engines(opts: &Options, cfg: &Config, paths: &Paths) -> Result<Vec<Re
         match discover::locate(eng, cfg, paths) {
             Outcome::Found(l) => resolved.push(Resolved {
                 engine: eng,
-                spec: ServerSpec::new(eng, &l.path, &l.mcp_args),
+                spec: client_spec(eng, &l, opts.scope, paths)?,
                 located: Some(l),
             }),
             // `--all` means "everything you can find", so a missing engine is
@@ -516,6 +516,27 @@ fn resolve_engines(opts: &Options, cfg: &Config, paths: &Paths) -> Result<Vec<Re
 fn lookup(id: &str) -> Result<&'static Engine> {
     engine::by_id(id)
         .ok_or_else(|| anyhow::anyhow!("未知的引擎 {id}（可用: {}）", engine::ids().join(" / ")))
+}
+
+/// The entry `install` writes for this engine.
+///
+/// HTTP engines get a URL; the bearer is copied in only when the file is not
+/// going to be committed. Stdio engines still spawn from the discovered binary.
+fn client_spec(
+    eng: &'static Engine,
+    located: &Located,
+    scope: Scope,
+    paths: &Paths,
+) -> Result<ServerSpec> {
+    match eng.http {
+        Some(url) if scope.version_controlled() => Ok(ServerSpec::http(eng, url, None)),
+        Some(url) => Ok(ServerSpec::http(
+            eng,
+            url,
+            Some(crate::token::current(paths)?),
+        )),
+        None => Ok(ServerSpec::stdio(eng, &located.path, &located.mcp_args)),
+    }
 }
 
 fn resolve_clients(opts: &Options, env: &Env) -> Result<Vec<&'static Client>> {
@@ -591,11 +612,15 @@ fn build(
             continue;
         }
 
-        let delegate = if opts.delegate {
-            c.delegate(opts.scope)
-        } else {
-            None
-        };
+        // HTTP: `codex mcp add --url` cannot set a static bearer, so an HTTP
+        // spec is always a direct write. Mixing it into a delegated stdio
+        // action would also leave the HTTP half unwritten.
+        let delegate =
+            if opts.delegate && !specs.iter().any(|s| matches!(s, ServerSpec::Http { .. })) {
+                c.delegate(opts.scope)
+            } else {
+                None
+            };
         // Removal by CLI is not universal: `code` has no counterpart to
         // `--add-mcp`, so VS Code always uninstalls by direct write.
         let delegate = match (opts.kind, delegate) {
@@ -607,30 +632,41 @@ fn build(
         let mut changes = Vec::new();
         for spec in &specs {
             // Sampled before the upsert, which is what removes them.
-            let stripped_credentials =
-                opts.kind == Kind::Install && doc.carries_credentials(c, &spec.name);
-            let secrets = if stripped_credentials {
-                doc.credential_values(c, &spec.name)
+            let putting_token_back = matches!(spec, ServerSpec::Http { token: Some(_), .. });
+            // A credential we are about to delete and not put back. Replacing
+            // one global token with the current one is an update, not a leak.
+            let stripped_credentials = opts.kind == Kind::Install
+                && doc.carries_credentials(c, spec.name())
+                && !putting_token_back;
+            let mut secrets = if stripped_credentials {
+                doc.credential_values(c, spec.name())
             } else {
                 Vec::new()
             };
+            if let ServerSpec::Http {
+                token: Some(token), ..
+            } = spec
+            {
+                secrets.push(format!("Bearer {token}"));
+                secrets.push(token.clone());
+            }
             let op = match opts.kind {
                 Kind::Install => doc
                     .upsert(c, spec)
-                    .with_context(|| format!("{file}: 无法写入 {}", spec.name))?,
+                    .with_context(|| format!("{file}: 无法写入 {}", spec.name()))?,
                 Kind::Uninstall => doc
-                    .remove(c, &spec.name)
-                    .with_context(|| format!("{file}: 无法移除 {}", spec.name))?,
+                    .remove(c, spec.name())
+                    .with_context(|| format!("{file}: 无法移除 {}", spec.name()))?,
             };
             let steps = match (&delegate, op.writes(), opts.kind) {
                 (Some(_), true, Kind::Install) => c.add_argv(spec, opts.scope),
-                (Some(_), true, Kind::Uninstall) => c.remove_argv(&spec.name, opts.scope),
+                (Some(_), true, Kind::Uninstall) => c.remove_argv(spec.name(), opts.scope),
                 _ => Vec::new(),
             };
             changes.push(Change {
                 spec: (opts.kind == Kind::Install).then(|| spec.clone()),
-                server: spec.name.clone(),
-                engine: spec.engine,
+                server: spec.name().to_owned(),
+                engine: spec.engine(),
                 op,
                 stripped_credentials,
                 secrets,
@@ -1261,8 +1297,16 @@ impl Plan {
                         o.insert("rotateRequired".into(), a.scope.version_controlled().into());
                     }
                     if let Some(spec) = &c.spec {
-                        o.insert("command".into(), spec.command.as_str().into());
-                        o.insert("args".into(), json!(spec.args));
+                        match spec {
+                            ServerSpec::Stdio { command, args, .. } => {
+                                o.insert("command".into(), command.as_str().into());
+                                o.insert("args".into(), json!(args));
+                            }
+                            ServerSpec::Http { url, token, .. } => {
+                                o.insert("url".into(), url.as_str().into());
+                                o.insert("hasToken".into(), token.is_some().into());
+                            }
+                        }
                     }
                     if !c.steps.is_empty() {
                         o.insert("commands".into(), json!(
@@ -1338,6 +1382,7 @@ pub fn list(paths: &Paths, json: bool) -> ! {
                     "file": r.file.as_str(),
                     "command": e.command,
                     "args": e.args,
+                    "url": e.url,
                 })).collect::<Vec<_>>()
             }).collect::<Vec<_>>(),
             "errors": rows.iter().filter_map(|r| r.error.as_ref().map(|e| json!({
@@ -1364,11 +1409,12 @@ pub fn list(paths: &Paths, json: bool) -> ! {
     table.set_header(vec!["SERVER", "客户端", "作用域", "命令", "文件"]);
     for r in &rows {
         for e in &r.entries {
-            let mut cmd = e
-                .command
-                .clone()
-                .unwrap_or_else(|| "(无 command)".to_owned());
-            if !e.args.is_empty() {
+            let mut cmd = match (&e.url, &e.command) {
+                (Some(url), _) => url.clone(),
+                (None, Some(command)) => command.clone(),
+                (None, None) => "(无 command)".to_owned(),
+            };
+            if e.url.is_none() && !e.args.is_empty() {
                 cmd.push(' ');
                 cmd.push_str(&e.args.join(" "));
             }
@@ -1439,9 +1485,10 @@ mod tests {
     /// `located: None` means the skill half finds nothing to export, which is
     /// what the server-side tests want; the skill tests below supply a stub.
     fn spec(engine: &'static str, command: &str, args: &[&str]) -> Resolved {
+        let eng = engine::by_id(engine).expect("test engines come from the registry");
         Resolved {
-            engine: engine::by_id(engine).expect("test engines come from the registry"),
-            spec: ServerSpec {
+            engine: eng,
+            spec: ServerSpec::Stdio {
                 name: client::server_name(engine),
                 engine,
                 command: command.to_owned(),
@@ -1707,7 +1754,7 @@ mod tests {
 
         let specs = resolve_engines(&o, &Config::default(), &paths).unwrap();
         assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].spec.name, "vibrev-bn");
+        assert_eq!(specs[0].spec.name(), "vibrev-bn");
         assert!(
             specs[0].located.is_none(),
             "uninstall must not need to find the binary"
@@ -1774,7 +1821,7 @@ esac
         let eng = engine::by_id("ida").expect("ida is registered");
         Resolved {
             engine: eng,
-            spec: ServerSpec::new(eng, bin, &[]),
+            spec: ServerSpec::stdio(eng, bin, &[]),
             located: Some(Located {
                 path: bin.to_owned(),
                 origin: crate::discover::Origin::Path,

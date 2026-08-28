@@ -5,8 +5,10 @@
       "args": ["-y", "@modelcontextprotocol/server-postgres"]
     },
     "vibrev-ida": {
-      "command": "<SANDBOX>/home/.vibrev/engines/ida-headless-mcp",
-      "args": ["serve", "--mode", "stdio"]
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer vbr_GOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN"
+      }
     },
     "vibrev-jadx": {
       "command": "<SANDBOX>/home/.vibrev/engines/rjadx",

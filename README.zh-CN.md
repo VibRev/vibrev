@@ -68,11 +68,23 @@ vibrev ida decompile main --limit 20   # 认不出来的参数原样交给引擎
 
 改写是**保形**的:`serde_json` 走一圈会把 VS Code `mcp.json` 里的注释全删掉,所以 JSONC 和 TOML 分别走 `jsonc-parser` 与 `toml_edit`。写入是原子的(临时文件 + rename)、带建议锁,并留一份 0600 的一次性 `.bak`。
 
-写进去的是一条直指引擎二进制的 stdio 条目——**`vibrev` 不在命令行上,也不在请求路径上**:
+IDA 和 BN 的 `serve` 默认是 HTTP，所以 `install` 写的是一个 URL，由你自己启动的进程来应答。bearer 只从 `~/.vibrev/token` 抄进**全局**客户端配置（项目级文件会进 git）：
+
+```jsonc
+"vibrev-ida": {
+  "type": "http",
+  "url": "http://127.0.0.1:8765/mcp",
+  "headers": { "Authorization": "Bearer vbr_…" }
+}
+```
+
+jadx 没有监听端口，仍然是客户端拉起的 stdio：
 
 ```jsonc
 "vibrev-jadx": { "command": "~/.vibrev/engines/rjadx", "args": ["mcp", "--stdio"] }
 ```
+
+HTTP 引擎要自己启动（`ida-headless-mcp` / `bn-headless-mcp`）；默认绑 `127.0.0.1:8765`。
 
 两个 flag 值得知道:
 

@@ -15,9 +15,11 @@
       "args": ["mcp-server-fetch"]
     },
     "vibrev-ida": {
-      "type": "stdio",
-      "command": "<SANDBOX>/home/.vibrev/engines/ida-headless-mcp",
-      "args": ["serve", "--mode", "stdio"]
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer vbr_GOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN"
+      }
     },
     "vibrev-jadx": {
       "type": "stdio",

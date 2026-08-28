@@ -8,8 +8,9 @@
 //! * hand this process over to one of them (`vibrev <engine> <args…>`)
 //! * write those binaries into an MCP client's config (`install` / `uninstall`)
 //!
-//! `install` writes a direct stdio entry per engine — the client spawns the engine
-//! itself and `vibrev` does not appear in the resulting command line.
+//! `install` writes an HTTP entry for engines whose `serve` defaults to a
+//! listener (IDA, BN) — the operator starts the process — and a stdio spawn for
+//! engines that have no listener (jadx).
 
 mod atomic;
 mod client;

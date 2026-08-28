@@ -11,10 +11,12 @@
 //! 3. **Names are the identity.** An existing `vibrev-<engine>` is edited where it
 //!    sits, so running `install` twice cannot produce a `vibrev-ida-2`.
 //!
-//! Even inside our own entry the update is surgical: only `command`, `args` and
-//! (where the schema has one) `type` are set, so a user who added `env` or
-//! `disabled` to `vibrev-ida` keeps it across an upgrade. The one exception is
-//! the keys describing the *other* transport — see [`HTTP_TRANSPORT_KEYS`].
+//! Even inside our own entry the update is surgical: only the keys of the
+//! transport being written (`command`/`args`, or `url`/`headers`) and (where
+//! the schema has one) `type` are set, so a user who added `env` or `disabled`
+//! to `vibrev-ida` keeps it across an upgrade. The one exception is the keys
+//! describing the *other* transport — see [`HTTP_TRANSPORT_KEYS`] and
+//! [`STDIO_TRANSPORT_KEYS`].
 
 use anyhow::{Context, Result, bail};
 use camino::Utf8Path;
@@ -24,33 +26,28 @@ use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
 use crate::client::{Client, Format, ServerSpec};
 
-/// The keys that describe an entry's *HTTP* transport, removed from any
-/// `vibrev-*` entry we write.
+/// The keys that describe an entry's *HTTP* transport.
 ///
-/// This is the single exception to "the update is surgical". vibrev only ever
-/// writes stdio entries, and an entry it owns must describe exactly one
-/// transport. Two reasons to strip rather than leave them, in this order:
+/// Stripped when we write stdio, set when we write HTTP. An entry we own must
+/// describe exactly one transport: Codex uses `command` versus `url` as the
+/// discriminator (no `type` field at all), so carrying both is a config error
+/// there rather than a merely untidy one.
 ///
-/// 1. **`headers` is where the credential lives.** The bearer token sits at
-///    `Authorization: Bearer <token>`. Left behind in a project-scope file it is
-///    a live secret inside the repository, and the shape is not hypothetical —
-///    it is the exact snippet the HTTP setup docs show users. Note that removing
-///    it here is necessary but *not* sufficient: once such a file has been
-///    committed the token is in history, and the only real fix is
-///    `vibrev token rotate`. Callers say so; see `install::render`.
-/// 2. **`command` next to `url` is ambiguous.** Codex uses exactly that pair as
-///    its transport discriminator (no `type` field at all), so an entry carrying
-///    both is a config error there rather than a merely untidy one.
+/// JSON clients spell the credential table `headers`. Codex spells it
+/// `http_headers`. Both names are recognised on read (token rotate) and
+/// stripped on a stdio write, so a leftover of either spelling cannot hide.
 ///
-/// Deliberately *not* a blocklist of secret-sounding names: everything
-/// orthogonal to transport (`env`, `disabled`, `timeout`, …) is still preserved.
-/// These four clients spell the HTTP transport with `url` + `headers`; other
-/// clients' spellings (`httpUrl`, `serverUrl`, `uri`) are not our business until
-/// they are in [`crate::client::CLIENTS`].
-pub const HTTP_TRANSPORT_KEYS: &[&str] = &["url", "headers"];
+/// `headers` is also where the credential lives. Left behind in a project-scope
+/// file it is a live secret inside the repository. Removing it is necessary but
+/// *not* sufficient once the file has been committed — the only real fix is
+/// `vibrev token rotate`. Callers say so; see `install::render`.
+pub const HTTP_TRANSPORT_KEYS: &[&str] = &["url", "headers", "http_headers"];
+
+/// The keys that describe an entry's *stdio* transport, stripped when we write HTTP.
+pub const STDIO_TRANSPORT_KEYS: &[&str] = &["command", "args"];
 
 /// The subset of [`HTTP_TRANSPORT_KEYS`] that can carry a credential.
-pub const CREDENTIAL_KEYS: &[&str] = &["headers"];
+pub const CREDENTIAL_KEYS: &[&str] = &["headers", "http_headers"];
 
 /// What a single upsert or removal did. Drives both the dry-run wording and the
 /// idempotency guarantee.
@@ -98,6 +95,7 @@ pub struct Entry {
     pub name: String,
     pub command: Option<String>,
     pub args: Vec<String>,
+    pub url: Option<String>,
 }
 
 /// A parsed client config, still carrying every byte of its original formatting.
@@ -394,6 +392,7 @@ impl Doc {
                                     .as_ref()
                                     .and_then(|o| json_strs(o, "args"))
                                     .unwrap_or_default(),
+                                url: obj.as_ref().and_then(|o| json_str(o, "url")),
                             })
                         })
                         .collect::<Vec<_>>()
@@ -417,6 +416,11 @@ impl Doc {
                                 .and_then(|t| t.get("args"))
                                 .and_then(toml_strs)
                                 .unwrap_or_default(),
+                            url: item
+                                .as_table_like()
+                                .and_then(|t| t.get("url"))
+                                .and_then(Item::as_str)
+                                .map(str::to_owned),
                         })
                         .collect::<Vec<_>>()
                 })
@@ -458,9 +462,9 @@ fn upsert_json(root: &CstRootNode, client: &Client, spec: &ServerSpec) -> Result
     let obj = root.object_value_or_set();
     let servers = obj.object_value_or_set(client.key);
 
-    let entry = match servers.get(&spec.name) {
+    let entry = match servers.get(spec.name()) {
         None => {
-            servers.append(&spec.name, json_entry_value(client, spec));
+            servers.append(spec.name(), json_entry_value(client, spec));
             return Ok(Op::Added);
         }
         Some(prop) => match prop.object_value() {
@@ -474,53 +478,103 @@ fn upsert_json(root: &CstRootNode, client: &Client, spec: &ServerSpec) -> Result
         },
     };
 
-    let before = Entry {
-        name: spec.name.clone(),
-        command: json_str(&entry, "command"),
-        args: json_strs(&entry, "args").unwrap_or_default(),
-    };
-    let type_ok = !client.emit_type || json_str(&entry, "type").as_deref() == Some("stdio");
-    // A leftover `url`/`headers` is a difference even when command and args
-    // already match, or an entry holding a stale token would report "unchanged"
-    // and the token would never be mentioned, let alone removed.
-    let http_leftovers = HTTP_TRANSPORT_KEYS.iter().any(|k| entry.get(k).is_some());
-    if type_ok
-        && !http_leftovers
-        && before.command.as_deref() == Some(spec.command.as_str())
-        && before.args == spec.args
-    {
+    if json_matches(&entry, client, spec) {
         return Ok(Op::Unchanged);
     }
+    json_apply(&entry, client, spec);
+    Ok(Op::Updated)
+}
 
-    // Set only the fields we own. `env`, `disabled`, and anything else the user
-    // added to this entry survives — except the other transport's keys.
-    if client.emit_type {
-        json_set(&entry, "type", CstInputValue::String("stdio".to_owned()));
+fn json_matches(entry: &CstObject, client: &Client, spec: &ServerSpec) -> bool {
+    match spec {
+        ServerSpec::Stdio { command, args, .. } => {
+            let type_ok = !client.emit_type || json_str(entry, "type").as_deref() == Some("stdio");
+            let http_leftovers = HTTP_TRANSPORT_KEYS.iter().any(|k| entry.get(k).is_some());
+            type_ok
+                && !http_leftovers
+                && json_str(entry, "command").as_deref() == Some(command.as_str())
+                && json_strs(entry, "args").unwrap_or_default() == *args
+        }
+        ServerSpec::Http { url, token, .. } => {
+            let type_ok = !client.emit_type || json_str(entry, "type").as_deref() == Some("http");
+            let stdio_leftovers = STDIO_TRANSPORT_KEYS.iter().any(|k| entry.get(k).is_some());
+            type_ok
+                && !stdio_leftovers
+                && json_str(entry, "url").as_deref() == Some(url.as_str())
+                && json_token_matches(entry, token.as_deref())
+        }
     }
-    json_set(
-        &entry,
-        "command",
-        CstInputValue::String(spec.command.clone()),
-    );
-    json_set(&entry, "args", json_args(&spec.args));
-    for key in HTTP_TRANSPORT_KEYS {
+}
+
+fn json_token_matches(entry: &CstObject, token: Option<&str>) -> bool {
+    match token {
+        Some(want) => {
+            json_headers_auth(entry).and_then(|v| bearer_token(&v).map(str::to_owned))
+                == Some(want.to_owned())
+        }
+        None => CREDENTIAL_KEYS.iter().all(|k| entry.get(k).is_none()),
+    }
+}
+
+fn json_apply(entry: &CstObject, client: &Client, spec: &ServerSpec) {
+    match spec {
+        ServerSpec::Stdio { command, args, .. } => {
+            if client.emit_type {
+                json_set(entry, "type", CstInputValue::String("stdio".to_owned()));
+            }
+            json_set(entry, "command", CstInputValue::String(command.clone()));
+            json_set(entry, "args", json_args(args));
+            json_remove_keys(entry, HTTP_TRANSPORT_KEYS);
+        }
+        ServerSpec::Http { url, token, .. } => {
+            if client.emit_type {
+                json_set(entry, "type", CstInputValue::String("http".to_owned()));
+            }
+            json_set(entry, "url", CstInputValue::String(url.clone()));
+            match token {
+                Some(token) => json_set(entry, "headers", json_bearer_headers(token)),
+                None => json_remove_keys(entry, CREDENTIAL_KEYS),
+            }
+            json_remove_keys(entry, STDIO_TRANSPORT_KEYS);
+        }
+    }
+}
+
+fn json_remove_keys(entry: &CstObject, keys: &[&str]) {
+    for key in keys {
         if let Some(prop) = entry.get(key) {
             prop.remove();
         }
     }
-    Ok(Op::Updated)
+}
+
+fn json_bearer_headers(token: &str) -> CstInputValue {
+    CstInputValue::Object(vec![(
+        "Authorization".to_owned(),
+        CstInputValue::String(format!("Bearer {token}")),
+    )])
 }
 
 fn json_entry_value(client: &Client, spec: &ServerSpec) -> CstInputValue {
     let mut fields = Vec::new();
-    if client.emit_type {
-        fields.push(("type".to_owned(), CstInputValue::String("stdio".to_owned())));
+    match spec {
+        ServerSpec::Stdio { command, args, .. } => {
+            if client.emit_type {
+                fields.push(("type".to_owned(), CstInputValue::String("stdio".to_owned())));
+            }
+            fields.push(("command".to_owned(), CstInputValue::String(command.clone())));
+            fields.push(("args".to_owned(), json_args(args)));
+        }
+        ServerSpec::Http { url, token, .. } => {
+            if client.emit_type {
+                fields.push(("type".to_owned(), CstInputValue::String("http".to_owned())));
+            }
+            fields.push(("url".to_owned(), CstInputValue::String(url.clone())));
+            if let Some(token) = token {
+                fields.push(("headers".to_owned(), json_bearer_headers(token)));
+            }
+        }
     }
-    fields.push((
-        "command".to_owned(),
-        CstInputValue::String(spec.command.clone()),
-    ));
-    fields.push(("args".to_owned(), json_args(&spec.args)));
     CstInputValue::Object(fields)
 }
 
@@ -617,38 +671,120 @@ fn upsert_toml(doc: &mut DocumentMut, client: &Client, spec: &ServerSpec) -> Res
         .and_then(Item::as_table_like_mut)
         .expect("just checked or created above");
 
-    let existing = parent.get(&spec.name);
+    let existing = parent.get(spec.name());
     if let Some(item) = existing {
         let Some(tbl) = item.as_table_like() else {
-            bail!("{}.{} 不是 TOML 表，拒绝写入", client.key, spec.name);
+            bail!("{}.{} 不是 TOML 表，拒绝写入", client.key, spec.name());
         };
-        let command = tbl.get("command").and_then(Item::as_str).map(str::to_owned);
-        let args = tbl.get("args").and_then(toml_strs).unwrap_or_default();
-        // See the JSON path: leftovers from the HTTP transport are a difference
-        // in their own right, so a stale token cannot hide behind "unchanged".
-        let http_leftovers = HTTP_TRANSPORT_KEYS.iter().any(|k| tbl.get(k).is_some());
-        if !http_leftovers && command.as_deref() == Some(spec.command.as_str()) && args == spec.args
-        {
+        if toml_matches(tbl, spec) {
             return Ok(Op::Unchanged);
         }
         let tbl = parent
-            .get_mut(&spec.name)
+            .get_mut(spec.name())
             .and_then(Item::as_table_like_mut)
             .expect("checked immediately above");
-        // In place, so a user's `env` or `startup_timeout_sec` on our entry stays.
-        tbl.insert("command", Item::Value(Value::from(spec.command.clone())));
-        tbl.insert("args", Item::Value(Value::Array(toml_args(&spec.args))));
-        for key in HTTP_TRANSPORT_KEYS {
-            tbl.remove(key);
-        }
+        toml_apply(tbl, spec);
         return Ok(Op::Updated);
     }
 
-    let mut tbl = Table::new();
-    tbl.insert("command", Item::Value(Value::from(spec.command.clone())));
-    tbl.insert("args", Item::Value(Value::Array(toml_args(&spec.args))));
-    parent.insert(&spec.name, Item::Table(tbl));
+    parent.insert(spec.name(), Item::Table(toml_entry(spec)));
     Ok(Op::Added)
+}
+
+fn toml_matches(tbl: &dyn toml_edit::TableLike, spec: &ServerSpec) -> bool {
+    match spec {
+        ServerSpec::Stdio { command, args, .. } => {
+            let http_leftovers = HTTP_TRANSPORT_KEYS.iter().any(|k| tbl.get(k).is_some());
+            !http_leftovers
+                && tbl.get("command").and_then(Item::as_str) == Some(command.as_str())
+                && tbl.get("args").and_then(toml_strs).unwrap_or_default() == *args
+        }
+        ServerSpec::Http { url, token, .. } => {
+            let stdio_leftovers = STDIO_TRANSPORT_KEYS.iter().any(|k| tbl.get(k).is_some());
+            !stdio_leftovers
+                && tbl.get("url").and_then(Item::as_str) == Some(url.as_str())
+                && toml_token_matches(tbl, token.as_deref())
+        }
+    }
+}
+
+fn toml_token_matches(tbl: &dyn toml_edit::TableLike, token: Option<&str>) -> bool {
+    match token {
+        Some(want) => {
+            toml_headers_auth_from(tbl).and_then(|v| bearer_token(&v).map(str::to_owned))
+                == Some(want.to_owned())
+        }
+        None => CREDENTIAL_KEYS.iter().all(|k| tbl.get(k).is_none()),
+    }
+}
+
+fn toml_apply(tbl: &mut dyn toml_edit::TableLike, spec: &ServerSpec) {
+    match spec {
+        ServerSpec::Stdio { command, args, .. } => {
+            tbl.insert("command", Item::Value(Value::from(command.clone())));
+            tbl.insert("args", Item::Value(Value::Array(toml_args(args))));
+            for key in HTTP_TRANSPORT_KEYS {
+                tbl.remove(key);
+            }
+        }
+        ServerSpec::Http { url, token, .. } => {
+            tbl.insert("url", Item::Value(Value::from(url.clone())));
+            match token {
+                Some(token) => toml_set_bearer(tbl, token),
+                None => {
+                    for key in CREDENTIAL_KEYS {
+                        tbl.remove(key);
+                    }
+                }
+            }
+            for key in STDIO_TRANSPORT_KEYS {
+                tbl.remove(key);
+            }
+        }
+    }
+}
+
+fn toml_set_bearer(tbl: &mut dyn toml_edit::TableLike, token: &str) {
+    let value = Item::Value(Value::from(format!("Bearer {token}")));
+    if let Some(headers) = tbl
+        .get_mut("http_headers")
+        .and_then(Item::as_table_like_mut)
+    {
+        headers.insert("Authorization", value);
+        tbl.remove("headers");
+        return;
+    }
+    if let Some(headers) = tbl.get_mut("headers").and_then(Item::as_table_like_mut) {
+        headers.insert("Authorization", value);
+        return;
+    }
+    let mut headers = Table::new();
+    headers.insert(
+        "Authorization",
+        Item::Value(Value::from(format!("Bearer {token}"))),
+    );
+    tbl.insert("http_headers", Item::Table(headers));
+    tbl.remove("headers");
+}
+
+fn toml_entry(spec: &ServerSpec) -> Table {
+    let mut tbl = Table::new();
+    toml_apply(&mut tbl, spec);
+    tbl
+}
+
+fn toml_headers_auth_from(tbl: &dyn toml_edit::TableLike) -> Option<String> {
+    for key in CREDENTIAL_KEYS {
+        if let Some(value) = tbl
+            .get(key)
+            .and_then(Item::as_table_like)
+            .and_then(|h| h.get("Authorization"))
+            .and_then(Item::as_str)
+        {
+            return Some(value.to_owned());
+        }
+    }
+    None
 }
 
 fn toml_looks_http(item: &Item) -> bool {
@@ -663,33 +799,22 @@ fn toml_looks_http(item: &Item) -> bool {
 }
 
 fn toml_headers_auth(item: &Item) -> Option<String> {
-    item.as_table_like()?
-        .get("headers")
-        .and_then(Item::as_table_like)
-        .and_then(|h| h.get("Authorization"))
-        .and_then(Item::as_str)
-        .map(str::to_owned)
+    toml_headers_auth_from(item.as_table_like()?)
 }
 
 fn toml_rewrite_auth(item: &mut Item, old: &[String], new: &str) -> bool {
     let Some(tbl) = item.as_table_like_mut() else {
         return false;
     };
-    let Some(headers) = tbl.get_mut("headers").and_then(Item::as_table_like_mut) else {
-        return false;
-    };
-    let matches = headers
-        .get("Authorization")
-        .and_then(Item::as_str)
+    let current = toml_headers_auth_from(tbl);
+    let matches = current
+        .as_deref()
         .and_then(bearer_token)
         .is_some_and(|token| old.iter().any(|o| o == token));
     if !matches {
         return false;
     }
-    headers.insert(
-        "Authorization",
-        Item::Value(Value::from(format!("Bearer {new}"))),
-    );
+    toml_set_bearer(tbl, new);
     true
 }
 
@@ -720,11 +845,20 @@ mod tests {
     use crate::client::by_id;
 
     fn spec(engine: &'static str, command: &str, args: &[&str]) -> ServerSpec {
-        ServerSpec {
+        ServerSpec::Stdio {
             name: crate::client::server_name(engine),
             engine,
             command: command.to_owned(),
             args: args.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    fn http_spec(engine: &'static str, url: &str, token: Option<&str>) -> ServerSpec {
+        ServerSpec::Http {
+            name: crate::client::server_name(engine),
+            engine,
+            url: url.to_owned(),
+            token: token.map(str::to_owned),
         }
     }
 
@@ -912,6 +1046,72 @@ startup_timeout_sec = 30
         assert!(after.contains("/opt/ida-headless-mcp"));
         // Keys orthogonal to transport are still none of our business.
         assert!(after.contains("\"RUST_LOG\": \"debug\""), "{after}");
+    }
+
+    #[test]
+    fn writing_http_drops_command_and_args() {
+        let before = r#"{
+  "mcpServers": {
+    "vibrev-ida": {
+      "type": "stdio",
+      "command": "/opt/ida-headless-mcp",
+      "args": ["serve", "--mode", "stdio"],
+      "env": { "RUST_LOG": "debug" }
+    }
+  }
+}
+"#;
+        let (op, after) = edit(
+            before,
+            "claude-code",
+            &http_spec("ida", "http://127.0.0.1:8765/mcp", Some("vbr_CURRENT")),
+        );
+        assert_eq!(op, Op::Updated);
+        assert!(after.contains("\"type\": \"http\""), "{after}");
+        assert!(after.contains("http://127.0.0.1:8765/mcp"), "{after}");
+        assert!(after.contains("Bearer vbr_CURRENT"), "{after}");
+        assert!(!after.contains("command"), "{after}");
+        assert!(!after.contains("args"), "{after}");
+        assert!(after.contains("\"RUST_LOG\": \"debug\""), "{after}");
+    }
+
+    #[test]
+    fn project_http_writes_the_url_and_not_the_token() {
+        let (op, after) = edit(
+            "{}",
+            "claude-code",
+            &http_spec("ida", "http://127.0.0.1:8765/mcp", None),
+        );
+        assert_eq!(op, Op::Added);
+        assert!(
+            after.contains("\"url\": \"http://127.0.0.1:8765/mcp\""),
+            "{after}"
+        );
+        assert!(!after.contains("Authorization"), "{after}");
+        assert!(!after.contains("headers"), "{after}");
+    }
+
+    #[test]
+    fn toml_http_uses_http_headers() {
+        let (op, after) = edit(
+            "",
+            "codex",
+            &http_spec("ida", "http://127.0.0.1:8765/mcp", Some("vbr_CURRENT")),
+        );
+        assert_eq!(op, Op::Added);
+        assert!(
+            after.contains("url = \"http://127.0.0.1:8765/mcp\""),
+            "{after}"
+        );
+        assert!(
+            after.contains("[mcp_servers.vibrev-ida.http_headers]"),
+            "{after}"
+        );
+        assert!(
+            after.contains("Authorization = \"Bearer vbr_CURRENT\""),
+            "{after}"
+        );
+        assert!(!after.contains("command"), "{after}");
     }
 
     #[test]

@@ -2,7 +2,8 @@
 //!
 //! `vibrev` links no engine code and sits on no request path, so all it needs per
 //! engine is: what the binary is called, how to make it speak stdio MCP (for the
-//! identity probe), and what to tell a user who does not have it.
+//! identity probe), whether `install` should point a client at a listener instead
+//! of spawning the binary, and what to tell a user who does not have it.
 //!
 //! The install guidance is deliberately conservative. Neither IDA nor BN can
 //! honestly be offered as a binary download today, so nothing here prints a
@@ -22,6 +23,12 @@ pub struct Engine {
     /// Overridable per engine via `mcp_args` in `config.toml` — an engine may well
     /// rename its subcommand before we notice.
     pub mcp_args: &'static [&'static str],
+    /// Client-facing listener, if this engine's `serve` defaults to HTTP.
+    ///
+    /// `None` means `install` writes a stdio entry and the client spawns the
+    /// binary. `Some` means `install` writes that URL and the operator starts
+    /// the process themselves; the identity probe still uses `mcp_args`.
+    pub http: Option<&'static str>,
     /// Argv that makes the engine describe the agent skills it carries, minus the
     /// trailing `--json`. Empty means it ships none and the probe is skipped
     /// entirely — an engine that grows a skill later changes this one line.
@@ -43,6 +50,7 @@ pub const ENGINES: &[Engine] = &[
         // initialize idalib until a database is opened, so it stays the
         // cheapest thing to hand a handshake probe.
         mcp_args: &["serve", "--mode", "stdio"],
+        http: Some(DEFAULT_HTTP_MCP_URL),
         // `skills list` answers out of data compiled into the binary: no
         // database, no license, no IDA installation.
         skills_args: &["skills", "list"],
@@ -72,11 +80,11 @@ pub const ENGINES: &[Engine] = &[
         about: "Binary Ninja",
         // Same default, same fix. `serve` speaks HTTP unless told otherwise,
         // and a bare invocation is a bare `serve` — which would leave the
-        // probe waiting on a pipe nobody reads and `install` writing
-        // stdio-typed client entries for a server that answers on a port.
-        // Nothing distinguishes the two engines here any more; ida above
-        // carries the long version.
+        // identity probe waiting on a pipe nobody reads. `install` writes the
+        // HTTP URL separately (`http` below). Nothing distinguishes the two
+        // engines on this field any more; ida above carries the long version.
         mcp_args: &["serve", "--mode", "stdio"],
+        http: Some(DEFAULT_HTTP_MCP_URL),
         // No skill vendored yet. The channel is engine-agnostic, so this becomes
         // `&["skills", "list"]` the day `bn-headless-mcp` grows a `skills/`.
         skills_args: &[],
@@ -109,6 +117,8 @@ pub const ENGINES: &[Engine] = &[
         // `rjadx mcp` refuses to start without an explicit transport
         // (CliError::McpTransportRequired), so `--stdio` is not optional here.
         mcp_args: &["mcp", "--stdio"],
+        // `rjadx mcp` has no HTTP listener; the client still spawns it.
+        http: None,
         // No skill vendored yet; see the note on `bn`.
         skills_args: &[],
         install: &[
@@ -126,6 +136,14 @@ pub const ENGINES: &[Engine] = &[
         ],
     },
 ];
+
+/// The listener URL `install` writes for engines whose `serve` defaults to HTTP.
+///
+/// Same bind as `vibrev_kit::transport::DEFAULT_BIND` plus the `/mcp` path the
+/// engines actually serve. Named here so the installer does not take the `http`
+/// feature just to read a string. Both IDA and BN bind this by default; the
+/// operator runs one of them, or rebinds.
+pub const DEFAULT_HTTP_MCP_URL: &str = "http://127.0.0.1:8765/mcp";
 
 /// Look an engine up by the id a user typed.
 pub fn by_id(id: &str) -> Option<&'static Engine> {
@@ -159,6 +177,13 @@ mod tests {
             text.contains("vibrev engine install bn"),
             "must still say the shortcut does not exist:\n{text}"
         );
+    }
+
+    #[test]
+    fn http_engines_share_the_default_listener_and_jadx_does_not() {
+        assert_eq!(by_id("ida").unwrap().http, Some(DEFAULT_HTTP_MCP_URL));
+        assert_eq!(by_id("bn").unwrap().http, Some(DEFAULT_HTTP_MCP_URL));
+        assert_eq!(by_id("jadx").unwrap().http, None);
     }
 
     #[test]

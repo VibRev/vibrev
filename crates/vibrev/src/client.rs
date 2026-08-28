@@ -1,9 +1,9 @@
 //! The MCP client registry — the one place that knows where the four supported
 //! clients keep their server lists and what shape an entry takes there.
 //!
-//! Every engine is a self-contained stdio MCP server, so an entry is always
-//! `command` + `args` and never a URL, a token, or a header. That is what makes a
-//! single [`ServerSpec`] renderable into all four dialects.
+//! An entry is either stdio (`command` + `args`, the client spawns the binary) or
+//! HTTP (`url` + optional bearer, the operator starts the listener). [`ServerSpec`]
+//! is that choice, rendered into all four dialects.
 //!
 //! The four differ in every axis that matters, which is why this is data and not a
 //! trait: top-level key (`mcpServers` / `servers` / `mcp_servers`), file format
@@ -76,23 +76,69 @@ pub enum Format {
 }
 
 /// A single `vibrev-<engine>` entry, before it is rendered into any dialect.
+///
+/// Two shapes because they are two transports: folding them into one struct
+/// with optional fields would let `command` sit next to `url`, which Codex
+/// treats as a config error rather than a merely untidy one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServerSpec {
-    /// `vibrev-<engine id>`. Also the idempotency key: an existing property with
-    /// this name is updated in place, never duplicated.
-    pub name: String,
-    pub engine: &'static str,
-    pub command: String,
-    pub args: Vec<String>,
+pub enum ServerSpec {
+    /// The client spawns `command` with `args`.
+    Stdio {
+        /// `vibrev-<engine id>`. Also the idempotency key.
+        name: String,
+        engine: &'static str,
+        command: String,
+        args: Vec<String>,
+    },
+    /// The client connects to a listener the operator started.
+    Http {
+        name: String,
+        engine: &'static str,
+        url: String,
+        /// Absent when the file is version-controlled: the URL still goes in so
+        /// the client knows where to connect, the token stays out of git.
+        token: Option<String>,
+    },
 }
 
 impl ServerSpec {
-    pub fn new(engine: &'static Engine, command: &Utf8Path, args: &[String]) -> Self {
-        Self {
+    pub fn stdio(engine: &'static Engine, command: &Utf8Path, args: &[String]) -> Self {
+        Self::Stdio {
             name: server_name(engine.id),
             engine: engine.id,
             command: command.to_string(),
             args: args.to_vec(),
+        }
+    }
+
+    pub fn http(engine: &'static Engine, url: &str, token: Option<String>) -> Self {
+        Self::Http {
+            name: server_name(engine.id),
+            engine: engine.id,
+            url: url.to_owned(),
+            token,
+        }
+    }
+
+    /// Uninstall only needs the name; the transport of a missing entry is nothing.
+    pub fn named(engine: &'static Engine) -> Self {
+        Self::Stdio {
+            name: server_name(engine.id),
+            engine: engine.id,
+            command: String::new(),
+            args: Vec::new(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Stdio { name, .. } | Self::Http { name, .. } => name,
+        }
+    }
+
+    pub fn engine(&self) -> &'static str {
+        match self {
+            Self::Stdio { engine, .. } | Self::Http { engine, .. } => engine,
         }
     }
 }
@@ -352,7 +398,7 @@ impl Client {
                             "claude".into(),
                             "mcp".into(),
                             "remove".into(),
-                            spec.name.clone(),
+                            spec.name().to_owned(),
                             "--scope".into(),
                             s.into(),
                         ],
@@ -365,7 +411,7 @@ impl Client {
                             "claude".into(),
                             "mcp".into(),
                             "add-json".into(),
-                            spec.name.clone(),
+                            spec.name().to_owned(),
                             self.entry_json(spec),
                             "--scope".into(),
                             s.into(),
@@ -375,17 +421,28 @@ impl Client {
                 ]
             }
             "codex" => {
-                // `codex mcp add` overwrites an existing entry in place, so one
-                // step is enough. `--` keeps engine flags out of codex's own parser.
+                // HTTP: `codex mcp add --url` cannot set a static bearer
+                // (`http_headers` is config-file only), so the installer never
+                // delegates an HTTP spec — see `install::build`. Stdio still
+                // uses `--` so engine flags stay out of codex's own parser.
+                let ServerSpec::Stdio {
+                    name,
+                    command,
+                    args,
+                    ..
+                } = spec
+                else {
+                    return vec![];
+                };
                 let mut argv = vec![
                     "codex".into(),
                     "mcp".into(),
                     "add".into(),
-                    spec.name.clone(),
+                    name.clone(),
                     "--".into(),
-                    spec.command.clone(),
+                    command.clone(),
                 ];
-                argv.extend(spec.args.iter().cloned());
+                argv.extend(args.iter().cloned());
                 vec![Step {
                     argv,
                     tolerate_failure: false,
@@ -434,25 +491,45 @@ impl Client {
 
     /// The entry body as Claude Code's `add-json` wants it.
     fn entry_json(&self, spec: &ServerSpec) -> String {
-        let mut o = serde_json::Map::new();
-        if self.emit_type {
-            o.insert("type".into(), "stdio".into());
-        }
-        o.insert("command".into(), spec.command.as_str().into());
-        o.insert("args".into(), serde_json::json!(spec.args));
-        serde_json::Value::Object(o).to_string()
+        serde_json::Value::Object(self.entry_fields(spec, None)).to_string()
     }
 
     /// `code --add-mcp` takes the name inside the JSON rather than as an argument.
     fn entry_json_named(&self, spec: &ServerSpec) -> String {
+        serde_json::Value::Object(self.entry_fields(spec, Some(spec.name()))).to_string()
+    }
+
+    fn entry_fields(
+        &self,
+        spec: &ServerSpec,
+        name: Option<&str>,
+    ) -> serde_json::Map<String, serde_json::Value> {
         let mut o = serde_json::Map::new();
-        o.insert("name".into(), spec.name.as_str().into());
-        if self.emit_type {
-            o.insert("type".into(), "stdio".into());
+        if let Some(name) = name {
+            o.insert("name".into(), name.into());
         }
-        o.insert("command".into(), spec.command.as_str().into());
-        o.insert("args".into(), serde_json::json!(spec.args));
-        serde_json::Value::Object(o).to_string()
+        match spec {
+            ServerSpec::Stdio { command, args, .. } => {
+                if self.emit_type {
+                    o.insert("type".into(), "stdio".into());
+                }
+                o.insert("command".into(), command.as_str().into());
+                o.insert("args".into(), serde_json::json!(args));
+            }
+            ServerSpec::Http { url, token, .. } => {
+                if self.emit_type {
+                    o.insert("type".into(), "http".into());
+                }
+                o.insert("url".into(), url.as_str().into());
+                if let Some(token) = token {
+                    o.insert(
+                        "headers".into(),
+                        serde_json::json!({ "Authorization": format!("Bearer {token}") }),
+                    );
+                }
+            }
+        }
+        o
     }
 }
 
@@ -594,7 +671,7 @@ mod tests {
     #[test]
     fn claude_add_is_remove_then_add() {
         let c = by_id("claude-code").unwrap();
-        let spec = ServerSpec {
+        let spec = ServerSpec::Stdio {
             name: "vibrev-jadx".into(),
             engine: "jadx",
             command: "/opt/rjadx".into(),
@@ -615,7 +692,7 @@ mod tests {
     #[test]
     fn codex_argv_puts_engine_flags_after_a_double_dash() {
         let c = by_id("codex").unwrap();
-        let spec = ServerSpec {
+        let spec = ServerSpec::Stdio {
             name: "vibrev-jadx".into(),
             engine: "jadx",
             command: "/opt/rjadx".into(),
@@ -645,7 +722,7 @@ mod tests {
 
     #[test]
     fn type_stdio_only_where_the_schema_documents_it() {
-        let spec = ServerSpec {
+        let spec = ServerSpec::Stdio {
             name: "vibrev-ida".into(),
             engine: "ida",
             command: "/opt/ida-headless-mcp".into(),

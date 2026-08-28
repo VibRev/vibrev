@@ -15,7 +15,7 @@
 //! Project-scope files are scanned so we can *report* them, but they never
 //! receive a token.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use serde_json::{Value, json};
 use vibrev_kit::token::{self as shared, TokenError};
@@ -396,6 +396,21 @@ fn configs_still_on(env: &Env, old: &[String]) -> Vec<Hit> {
         }
     }
     hits
+}
+
+/// The current bearer, creating the file on first use.
+///
+/// `install` writes this into global HTTP entries so the client can talk to a
+/// listener the operator started. The file is the same one `rotate` and every
+/// engine open.
+pub fn current(paths: &Paths) -> Result<String> {
+    let file = token_file(paths);
+    let loaded = shared::load_or_create(file.as_std_path()).map_err(describe)?;
+    loaded
+        .tokens
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("token 文件为空：{}", file))
 }
 
 /// The shared token file under this installation's root.

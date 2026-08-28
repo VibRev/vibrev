@@ -281,6 +281,11 @@ fn assert_golden(name: &str, actual: &str) {
 #[test]
 fn direct_write_matches_golden_for_every_client() {
     let sb = sandbox("golden-direct");
+    // Stable token so the golden files can pin the HTTP Authorization header.
+    sb.write(
+        ".vibrev/token",
+        "vbr_GOLDENGOLDENGOLDENGOLDENGOLDENGOLDEN\n",
+    );
 
     sb.write(
         ".config/Code/User/mcp.json",
@@ -420,11 +425,15 @@ args = ["-y", "some-other-server"]
         (".claude.json", "mcpServers"),
     ] {
         let v: serde_json::Value = serde_json::from_str(&sb.read(file)).unwrap();
-        assert!(v[key]["vibrev-ida"]["command"].is_string(), "{file}");
+        assert_eq!(
+            v[key]["vibrev-ida"]["url"], "http://127.0.0.1:8765/mcp",
+            "{file}"
+        );
         assert_eq!(v[key]["vibrev-jadx"]["args"][0], "mcp", "{file}");
     }
     assert!(vscode.contains("\"vibrev-ida\""));
     assert!(vscode.contains("\"vibrev-jadx\""));
+    assert!(vscode.contains("\"type\": \"http\""));
     assert!(vscode.contains("\"type\": \"stdio\""));
 }
 
@@ -863,10 +872,10 @@ fn codex_has_no_project_scope_and_says_so() {
 // history after it is deleted — so the behaviour when vibrev meets one has to be
 // pinned, not left to whatever the merge happens to do.
 //
-// vibrev cannot currently *write* a token: every entry it emits is stdio, and
-// `ServerSpec` has no field for one. The reachable form of the leak is therefore
-// an entry that already carries one — hand-written, left by another tool, or
-// copied from a documented HTTP snippet — which vibrev then rewrites.
+// Project-scope HTTP entries get the URL and not the bearer: those files are
+// committed. The reachable form of a leak is therefore an entry that already
+// carries a token — hand-written, left by another tool, or copied from a
+// documented snippet — which a stdio engine rewrite (jadx) then strips.
 
 /// The documented snippet for the HTTP option, already in place.
 const LEAKY_MCP_JSON: &str = r#"{
@@ -926,6 +935,36 @@ fn a_token_in_a_committed_file_is_removed_and_rotation_is_demanded() {
         leaked.is_empty(),
         "secret still in the project dir: {leaked:?}"
     );
+}
+
+#[test]
+fn project_scope_http_writes_the_url_and_not_the_token() {
+    let sb = sandbox("project-http-no-token");
+    sb.write(
+        ".vibrev/token",
+        "vbr_MUSTNOTLEAKMUSTNOTLEAKMUSTNOTLEAKMUST\n",
+    );
+
+    let out = sb.vibrev(&[
+        "install",
+        "ida",
+        "--client",
+        "claude-code",
+        "--scope",
+        "project",
+        "--yes",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let after = sb.read_proj(".mcp.json");
+    assert!(after.contains("http://127.0.0.1:8765/mcp"), "{after}");
+    assert!(after.contains("\"type\": \"http\""), "{after}");
+    assert!(
+        !after.contains("vbr_MUSTNOTLEAK"),
+        "token leaked into the repo file:\n{after}"
+    );
+    assert!(!after.contains("Authorization"), "{after}");
+    assert!(!after.contains("headers"), "{after}");
 }
 
 /// Every file under `dir` still containing the test token.
