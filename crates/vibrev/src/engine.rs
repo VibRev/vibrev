@@ -70,11 +70,13 @@ pub const ENGINES: &[Engine] = &[
         id: "bn",
         bin: "bn-headless-mcp",
         about: "Binary Ninja",
-        // Still stdio on a bare invocation. This used to be the shared
-        // assumption behind both engines; ida has since moved and says so
-        // above, so state it here rather than leave the empty slice to imply
-        // a default that is now engine-specific.
-        mcp_args: &[],
+        // Same default, same fix. `serve` speaks HTTP unless told otherwise,
+        // and a bare invocation is a bare `serve` — which would leave the
+        // probe waiting on a pipe nobody reads and `install` writing
+        // stdio-typed client entries for a server that answers on a port.
+        // Nothing distinguishes the two engines here any more; ida above
+        // carries the long version.
+        mcp_args: &["serve", "--mode", "stdio"],
         // No skill vendored yet. The channel is engine-agnostic, so this becomes
         // `&["skills", "list"]` the day `bn-headless-mcp` grows a `skills/`.
         skills_args: &[],
