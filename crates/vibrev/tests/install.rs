@@ -110,6 +110,15 @@ impl Sandbox {
         self.home.join(rel).exists()
     }
 
+    /// VS Code's user-level `mcp.json`, matching `Env::resolve` on this platform.
+    fn vscode_user(&self) -> &'static str {
+        if cfg!(target_os = "macos") {
+            "Library/Application Support/Code/User/mcp.json"
+        } else {
+            ".config/Code/User/mcp.json"
+        }
+    }
+
     /// Same, but for the project-scope files — the ones that live in the repo and
     /// therefore get committed.
     fn write_proj(&self, rel: &str, body: &str) {
@@ -288,7 +297,7 @@ fn direct_write_matches_golden_for_every_client() {
     );
 
     sb.write(
-        ".config/Code/User/mcp.json",
+        sb.vscode_user(),
         r#"{
   // MCP servers for this profile. Edited by hand — keep the comments!
   "inputs": [
@@ -367,14 +376,13 @@ args = ["-y", "some-other-server"]
         "vscode",
         "--client",
         "codex",
+        "--scope",
+        "global",
         "--yes",
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
 
-    assert_golden(
-        "vscode.mcp.json",
-        &sb.normalize(&sb.read(".config/Code/User/mcp.json")),
-    );
+    assert_golden("vscode.mcp.json", &sb.normalize(&sb.read(sb.vscode_user())));
     assert_golden(
         "codex.config.toml",
         &sb.normalize(&sb.read(".codex/config.toml")),
@@ -390,7 +398,7 @@ args = ["-y", "some-other-server"]
 
     // Not a golden file, because these are the properties that matter and they
     // should fail with a clear message rather than as a diff.
-    let vscode = sb.read(".config/Code/User/mcp.json");
+    let vscode = sb.read(sb.vscode_user());
     assert!(vscode.contains("keep the comments!"), "line comment lost");
     assert!(
         vscode.contains("// never inline the secret"),
@@ -460,7 +468,9 @@ args = ["-y", "some-other-server"]
     sb.install_stubs();
     sb.write(".codex/config.toml", COMMENTED);
 
-    let out = sb.vibrev(&["install", "jadx", "--client", "codex", "--yes"]);
+    let out = sb.vibrev(&[
+        "install", "jadx", "--client", "codex", "--scope", "global", "--yes",
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("[直接写入]"), "{}", stdout(&out));
     assert!(stdout(&out).contains("将产生的改动:"), "{}", stdout(&out));
@@ -483,6 +493,8 @@ args = ["-y", "some-other-server"]
         "--client",
         "codex",
         "--delegate",
+        "--scope",
+        "global",
         "--yes",
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -520,6 +532,8 @@ fn delegation_runs_the_client_cli_and_tolerates_its_expected_failures() {
         "--client",
         "vscode",
         "--delegate",
+        "--scope",
+        "global",
         "--yes",
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -550,6 +564,8 @@ fn delegation_runs_the_client_cli_and_tolerates_its_expected_failures() {
             .contains("[mcp_servers.vibrev-jadx]")
     );
 
+    // The stub writes the Linux path on every platform; that is the file it
+    // owns, not the one `Env::resolve` would pick for a direct write.
     let vscode: serde_json::Value =
         serde_json::from_str(&sb.read(".config/Code/User/mcp.json")).unwrap();
     assert_eq!(vscode["servers"]["vibrev-jadx"]["type"], "stdio");
@@ -602,6 +618,8 @@ fn a_failing_client_cli_fails_the_command() {
         "--client",
         "codex",
         "--delegate",
+        "--scope",
+        "global",
         "--yes",
     ]);
     assert!(!out.status.success());
@@ -617,7 +635,9 @@ fn a_failing_client_cli_fails_the_command() {
 fn installing_twice_updates_in_place_and_never_duplicates() {
     let sb = sandbox("idempotent");
 
-    let first = sb.vibrev(&["install", "jadx", "--client", "cursor", "--yes"]);
+    let first = sb.vibrev(&[
+        "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(first.status.success(), "{}", stderr(&first));
     assert!(
         stdout(&first).contains("新增  vibrev-jadx"),
@@ -626,7 +646,9 @@ fn installing_twice_updates_in_place_and_never_duplicates() {
     );
 
     // Second run, same engine path: nothing to do at all.
-    let second = sb.vibrev(&["install", "jadx", "--client", "cursor", "--yes"]);
+    let second = sb.vibrev(&[
+        "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(second.status.success(), "{}", stderr(&second));
     let text = stdout(&second);
     assert!(text.contains("无变化  vibrev-jadx"), "{text}");
@@ -647,7 +669,9 @@ fn installing_twice_updates_in_place_and_never_duplicates() {
     )
     .unwrap();
 
-    let third = sb.vibrev(&["install", "jadx", "--client", "cursor", "--yes"]);
+    let third = sb.vibrev(&[
+        "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(third.status.success(), "{}", stderr(&third));
     assert!(
         stdout(&third).contains("更新  vibrev-jadx"),
@@ -669,7 +693,15 @@ fn installing_twice_updates_in_place_and_never_duplicates() {
 fn dry_run_says_add_the_first_time_and_update_the_second() {
     let sb = sandbox("dryrun-wording");
 
-    let preview = sb.vibrev(&["install", "jadx", "--client", "cursor", "--dry-run"]);
+    let preview = sb.vibrev(&[
+        "install",
+        "jadx",
+        "--client",
+        "cursor",
+        "--scope",
+        "global",
+        "--dry-run",
+    ]);
     assert!(preview.status.success(), "{}", stderr(&preview));
     assert!(stdout(&preview).contains("新增  vibrev-jadx"));
     assert!(stdout(&preview).contains("--dry-run：未写入任何文件"));
@@ -678,7 +710,9 @@ fn dry_run_says_add_the_first_time_and_update_the_second() {
         "--dry-run must not create files"
     );
 
-    sb.vibrev(&["install", "jadx", "--client", "cursor", "--yes"]);
+    sb.vibrev(&[
+        "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
 
     // Same engine, new path → the preview says "update", not "add".
     let moved = sb.home.join("elsewhere").join("rjadx");
@@ -690,7 +724,15 @@ fn dry_run_says_add_the_first_time_and_update_the_second() {
     )
     .unwrap();
 
-    let again = sb.vibrev(&["install", "jadx", "--client", "cursor", "--dry-run"]);
+    let again = sb.vibrev(&[
+        "install",
+        "jadx",
+        "--client",
+        "cursor",
+        "--scope",
+        "global",
+        "--dry-run",
+    ]);
     let text = stdout(&again);
     assert!(text.contains("更新  vibrev-jadx"), "{text}");
     assert!(text.contains("将产生的改动:"), "{text}");
@@ -710,6 +752,8 @@ fn dry_run_json_reports_the_plan_without_writing() {
         "jadx",
         "--client",
         "cursor",
+        "--scope",
+        "global",
         "--dry-run",
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -735,7 +779,9 @@ fn a_broken_config_aborts_instead_of_being_rebuilt() {
     let broken = "{\n  \"mcpServers\": {\n    \"a\": { \"command\": \"x\" }\n";
     sb.write(".cursor/mcp.json", broken);
 
-    let out = sb.vibrev(&["install", "jadx", "--client", "cursor", "--yes"]);
+    let out = sb.vibrev(&[
+        "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(
         !out.status.success(),
         "a broken config must not be written over"
@@ -759,7 +805,9 @@ fn broken_toml_aborts_too_and_reports_json_errors_on_stdout() {
     let broken = "[mcp_servers.a\ncommand = \"x\"\n";
     sb.write(".codex/config.toml", broken);
 
-    let out = sb.vibrev(&["--json", "install", "jadx", "--client", "codex", "--yes"]);
+    let out = sb.vibrev(&[
+        "--json", "install", "jadx", "--client", "codex", "--scope", "global", "--yes",
+    ]);
     assert!(!out.status.success());
 
     // `--json` failures are a document on stdout, so a caller parses one stream
@@ -776,7 +824,9 @@ fn a_backup_is_taken_once_and_never_clobbered() {
     let original = "{\n  \"mcpServers\": {}\n}\n";
     sb.write(".cursor/mcp.json", original);
 
-    let first = sb.vibrev(&["install", "jadx", "--client", "cursor", "--yes"]);
+    let first = sb.vibrev(&[
+        "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(first.status.success(), "{}", stderr(&first));
     assert!(
         stdout(&first).contains("已备份原文件到"),
@@ -795,7 +845,9 @@ fn a_backup_is_taken_once_and_never_clobbered() {
     )
     .unwrap();
 
-    let second = sb.vibrev(&["install", "jadx", "--client", "cursor", "--yes"]);
+    let second = sb.vibrev(&[
+        "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(second.status.success(), "{}", stderr(&second));
     assert_eq!(
         sb.read(".cursor/mcp.json.bak"),
@@ -809,7 +861,9 @@ fn a_backup_is_taken_once_and_never_clobbered() {
 fn a_missing_engine_is_refused_with_its_install_guidance() {
     let sb = sandbox("missing-engine");
 
-    let out = sb.vibrev(&["install", "bn", "--client", "cursor", "--yes"]);
+    let out = sb.vibrev(&[
+        "install", "bn", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(!out.status.success());
     let err = stderr(&out);
     assert!(err.contains("bn-headless-mcp"), "{err}");
@@ -834,6 +888,8 @@ fn all_skips_engines_that_are_not_installed() {
         "--all",
         "--client",
         "cursor",
+        "--scope",
+        "global",
         "--dry-run",
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -851,18 +907,15 @@ fn all_skips_engines_that_are_not_installed() {
 // ------------------------------------------------------------ scope rules ---
 
 #[test]
-fn codex_has_no_project_scope_and_says_so() {
+fn codex_project_scope_writes_repo_config_toml() {
     let sb = sandbox("codex-project");
     let out = sb.vibrev(&[
         "install", "jadx", "--client", "codex", "--scope", "project", "--yes",
     ]);
-    assert!(
-        !out.status.success(),
-        "nothing to do is an error, not a silent no-op"
-    );
-    let text = format!("{}{}", stdout(&out), stderr(&out));
-    assert!(text.contains("没有项目级作用域"), "{text}");
-    assert!(!sb.proj.join(".codex").exists());
+    assert!(out.status.success(), "{}", stderr(&out));
+    let body = sb.read_proj(".codex/config.toml");
+    assert!(body.contains("[mcp_servers.vibrev-jadx]"), "{body}");
+    assert!(!sb.exists(".codex/config.toml"));
 }
 
 // ------------------------------------------------------- credentials in git ---
@@ -872,10 +925,11 @@ fn codex_has_no_project_scope_and_says_so() {
 // history after it is deleted — so the behaviour when vibrev meets one has to be
 // pinned, not left to whatever the merge happens to do.
 //
-// Project-scope HTTP entries get the URL and not the bearer: those files are
-// committed. The reachable form of a leak is therefore an entry that already
-// carries a token — hand-written, left by another tool, or copied from a
-// documented snippet — which a stdio engine rewrite (jadx) then strips.
+// Project-scope HTTP entries get the URL and not the bearer by default: those
+// files are committed. `--with-token` writes the bearer anyway. The reachable
+// form of a leak without that flag is an entry that already carries a token —
+// hand-written, left by another tool, or copied from a documented snippet —
+// which a stdio engine rewrite (jadx) then strips.
 
 /// The documented snippet for the HTTP option, already in place.
 const LEAKY_MCP_JSON: &str = r#"{
@@ -965,6 +1019,145 @@ fn project_scope_http_writes_the_url_and_not_the_token() {
     );
     assert!(!after.contains("Authorization"), "{after}");
     assert!(!after.contains("headers"), "{after}");
+
+    let text = stdout(&out);
+    assert!(
+        text.contains("未写入 Authorization"),
+        "project HTTP without a token has to say the client will 401:\n{text}"
+    );
+    assert!(text.contains("--with-token"), "{text}");
+}
+
+#[test]
+fn project_scope_with_token_writes_the_bearer() {
+    let sb = sandbox("project-http-with-token");
+    sb.write(
+        ".vibrev/token",
+        "vbr_PROJECTTOKENPROJECTTOKENPROJECTTOKEN\n",
+    );
+
+    let out = sb.vibrev(&[
+        "install",
+        "ida",
+        "--client",
+        "claude-code",
+        "--scope",
+        "project",
+        "--with-token",
+        "--yes",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let after = sb.read_proj(".mcp.json");
+    assert!(after.contains("http://127.0.0.1:8765/mcp"), "{after}");
+    assert!(
+        after.contains("Bearer vbr_PROJECTTOKENPROJECTTOKENPROJECTTOKEN"),
+        "token missing from the project file:\n{after}"
+    );
+
+    let text = stdout(&out);
+    assert!(
+        text.contains("凭据将写入项目文件"),
+        "writing a token into git has to be said out loud:\n{text}"
+    );
+    assert!(
+        !text.contains("vbr_PROJECTTOKEN"),
+        "the preview printed the credential:\n{text}"
+    );
+    assert!(text.contains("‹凭据已遮蔽›"), "{text}");
+}
+
+#[test]
+fn global_no_token_omits_the_bearer() {
+    let sb = sandbox("global-http-no-token");
+    sb.write(
+        ".vibrev/token",
+        "vbr_MUSTNOTLEAKMUSTNOTLEAKMUSTNOTLEAKMUST\n",
+    );
+
+    let out = sb.vibrev(&[
+        "install",
+        "ida",
+        "--client",
+        "claude-code",
+        "--no-token",
+        "--scope",
+        "global",
+        "--yes",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let after = sb.read(".claude.json");
+    assert!(after.contains("http://127.0.0.1:8765/mcp"), "{after}");
+    assert!(after.contains("\"type\": \"http\""), "{after}");
+    assert!(
+        !after.contains("vbr_MUSTNOTLEAK"),
+        "token leaked into the global file despite --no-token:\n{after}"
+    );
+    assert!(!after.contains("Authorization"), "{after}");
+
+    let text = stdout(&out);
+    assert!(text.contains("未写入 Authorization"), "{text}");
+}
+
+#[test]
+fn with_token_and_no_token_are_rejected_together() {
+    let sb = sandbox("token-flags-conflict");
+    let out = sb.vibrev(&[
+        "install",
+        "ida",
+        "--with-token",
+        "--no-token",
+        "--scope",
+        "global",
+        "--yes",
+    ]);
+    assert!(!out.status.success(), "conflicting flags must not install");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(
+        text.contains("--with-token") && text.contains("--no-token"),
+        "clap should name both flags:\n{text}"
+    );
+}
+
+#[test]
+fn default_scope_is_project() {
+    let sb = sandbox("default-project");
+    let out = sb.vibrev(&["install", "ida", "--client", "claude-code", "--yes"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let after = sb.read_proj(".mcp.json");
+    assert!(after.contains("\"type\": \"http\""), "{after}");
+    assert!(after.contains("http://127.0.0.1:8765/mcp"), "{after}");
+    assert!(!sb.exists(".claude.json"), "default must not write global");
+}
+
+#[test]
+fn mode_stdio_writes_a_spawn_for_an_http_engine() {
+    let sb = sandbox("mode-stdio");
+    let out = sb.vibrev(&[
+        "install",
+        "ida",
+        "--client",
+        "claude-code",
+        "--mode",
+        "stdio",
+        "--yes",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let after = sb.read_proj(".mcp.json");
+    assert!(after.contains("\"type\": \"stdio\""), "{after}");
+    assert!(after.contains("serve"), "{after}");
+    assert!(!after.contains("http://"), "{after}");
+    assert!(!after.contains("Authorization"), "{after}");
+}
+
+#[test]
+fn mode_stdio_rejects_token_flags() {
+    let sb = sandbox("mode-stdio-token");
+    let out = sb.vibrev(&["install", "ida", "--mode", "stdio", "--with-token", "--yes"]);
+    assert!(!out.status.success());
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(text.contains("--mode stdio"), "{text}");
 }
 
 /// Every file under `dir` still containing the test token.
@@ -1045,7 +1238,15 @@ fn a_global_backup_still_sits_next_to_the_file() {
     let sb = sandbox("global-token-backup");
     sb.write(".claude.json", LEAKY_MCP_JSON);
 
-    let out = sb.vibrev(&["install", "jadx", "--client", "claude-code", "--yes"]);
+    let out = sb.vibrev(&[
+        "install",
+        "jadx",
+        "--client",
+        "claude-code",
+        "--scope",
+        "global",
+        "--yes",
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
         sb.exists(".claude.json.bak"),
@@ -1061,7 +1262,15 @@ fn the_same_token_in_a_global_file_is_removed_without_demanding_rotation() {
     let sb = sandbox("global-token");
     sb.write(".claude.json", LEAKY_MCP_JSON);
 
-    let out = sb.vibrev(&["install", "jadx", "--client", "claude-code", "--yes"]);
+    let out = sb.vibrev(&[
+        "install",
+        "jadx",
+        "--client",
+        "claude-code",
+        "--scope",
+        "global",
+        "--yes",
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
 
     let after = sb.read(".claude.json");
@@ -1153,6 +1362,8 @@ fn json_mode_flags_the_credential_and_whether_rotation_is_needed() {
         "jadx",
         "--client",
         "claude-code",
+        "--scope",
+        "global",
         "--yes",
     ]);
     let doc2: serde_json::Value = serde_json::from_str(&stdout(&out2)).unwrap();
@@ -1177,6 +1388,8 @@ fn delegation_does_not_claim_a_removal_it_cannot_perform() {
         "--client",
         "claude-code",
         "--delegate",
+        "--scope",
+        "global",
         "--yes",
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -1238,7 +1451,9 @@ fn json_mode_also_needs_yes_before_it_writes() {
     assert!(!sb.exists(".cursor/mcp.json"));
 
     // With `--yes` it goes through and reports `dryRun: false`.
-    let ok = sb.vibrev(&["--json", "install", "jadx", "--client", "cursor", "--yes"]);
+    let ok = sb.vibrev(&[
+        "--json", "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(ok.status.success(), "{}", stderr(&ok));
     let v: serde_json::Value = serde_json::from_str(&stdout(&ok)).unwrap();
     assert_eq!(v["dryRun"], false);
@@ -1249,7 +1464,15 @@ fn json_mode_also_needs_yes_before_it_writes() {
 #[test]
 fn piped_output_carries_no_colour_escapes() {
     let sb = sandbox("no-color");
-    let out = sb.vibrev(&["install", "jadx", "--client", "cursor", "--dry-run"]);
+    let out = sb.vibrev(&[
+        "install",
+        "jadx",
+        "--client",
+        "cursor",
+        "--scope",
+        "global",
+        "--dry-run",
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
         !stdout(&out).contains('\u{1b}'),
@@ -1271,11 +1494,20 @@ fn uninstall_removes_only_our_entries() {
 }
 "#,
     );
-    let install = sb.vibrev(&["install", "--all", "--client", "cursor", "--yes"]);
+    let install = sb.vibrev(&[
+        "install", "--all", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(install.status.success(), "{}", stderr(&install));
     assert!(sb.read(".cursor/mcp.json").contains("vibrev-ida"));
 
-    let out = sb.vibrev(&["uninstall", "--client", "cursor", "--yes"]);
+    let out = sb.vibrev(&[
+        "uninstall",
+        "--client",
+        "cursor",
+        "--scope",
+        "global",
+        "--yes",
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
         stdout(&out).contains("移除  vibrev-ida"),
@@ -1292,7 +1524,14 @@ fn uninstall_removes_only_our_entries() {
 #[test]
 fn uninstall_never_creates_a_file_that_was_not_there() {
     let sb = sandbox("uninstall-absent");
-    let out = sb.vibrev(&["uninstall", "--client", "cursor", "--yes"]);
+    let out = sb.vibrev(&[
+        "uninstall",
+        "--client",
+        "cursor",
+        "--scope",
+        "global",
+        "--yes",
+    ]);
     assert!(!out.status.success(), "there was nothing to do");
     assert!(!sb.exists(".cursor/mcp.json"));
 }
@@ -1300,12 +1539,22 @@ fn uninstall_never_creates_a_file_that_was_not_there() {
 #[test]
 fn uninstall_works_after_the_engine_binary_is_gone() {
     let sb = sandbox("uninstall-no-binary");
-    let install = sb.vibrev(&["install", "jadx", "--client", "cursor", "--yes"]);
+    let install = sb.vibrev(&[
+        "install", "jadx", "--client", "cursor", "--scope", "global", "--yes",
+    ]);
     assert!(install.status.success(), "{}", stderr(&install));
 
     std::fs::remove_file(sb.home.join(".vibrev/engines/rjadx")).unwrap();
 
-    let out = sb.vibrev(&["uninstall", "jadx", "--client", "cursor", "--yes"]);
+    let out = sb.vibrev(&[
+        "uninstall",
+        "jadx",
+        "--client",
+        "cursor",
+        "--scope",
+        "global",
+        "--yes",
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!sb.read(".cursor/mcp.json").contains("vibrev-jadx"));
 }
@@ -1318,7 +1567,7 @@ fn list_reports_what_is_configured_and_where() {
         "{\n  \"mcpServers\": {\n    \"keepme\": { \"command\": \"npx\" }\n  }\n}\n",
     );
     sb.vibrev(&[
-        "install", "--all", "--client", "cursor", "--client", "codex", "--yes",
+        "install", "--all", "--client", "cursor", "--client", "codex", "--scope", "global", "--yes",
     ]);
     sb.vibrev(&[
         "install", "jadx", "--client", "vscode", "--scope", "project", "--yes",

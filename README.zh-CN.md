@@ -27,8 +27,9 @@ VibRev 逆向 MCP 引擎的共享运行时,以及把它们接进 MCP 客户端�
 
 ```bash
 vibrev doctor                      # 装了什么、在哪、什么版本
-vibrev install --all               # 为找到的每个引擎写 MCP 条目(默认连 skill 一起装)
-vibrev install ida --client claude-code
+vibrev install --all               # 为找到的每个引擎写 MCP 条目（默认 project + HTTP，连 skill）
+vibrev install ida --mode stdio    # 客户端拉起二进制，不连监听面
+vibrev install ida --scope global --client claude-code
 vibrev list                        # 哪些客户端当前持有 vibrev 条目
 vibrev uninstall                   # 不点名引擎 = 移除所有 vibrev-* 条目
 vibrev skill list                  # 每个引擎提供哪些 skill、本地是什么状态
@@ -64,11 +65,11 @@ vibrev ida decompile main --limit 20   # 认不出来的参数原样交给引擎
 | `claude-code` | Claude Code | `~/.claude.json` | `./.mcp.json` | JSON |
 | `cursor` | Cursor | `~/.cursor/mcp.json` | `./.cursor/mcp.json` | JSON |
 | `vscode` | VS Code | `<config>/Code/User/mcp.json` | `./.vscode/mcp.json` | JSONC |
-| `codex` | Codex | `~/.codex/config.toml` | ——(没有按仓库的文件) | TOML |
+| `codex` | Codex | `~/.codex/config.toml` | `./.codex/config.toml` | TOML |
 
 改写是**保形**的:`serde_json` 走一圈会把 VS Code `mcp.json` 里的注释全删掉,所以 JSONC 和 TOML 分别走 `jsonc-parser` 与 `toml_edit`。写入是原子的(临时文件 + rename)、带建议锁,并留一份 0600 的一次性 `.bak`。
 
-IDA 和 BN 的 `serve` 默认是 HTTP，所以 `install` 写的是一个 URL，由你自己启动的进程来应答。bearer 只从 `~/.vibrev/token` 抄进**全局**客户端配置（项目级文件会进 git）：
+`install` 默认是 **project** 作用域和 **`--mode http`**。IDA 和 BN 得到一个 URL，由你自己启动的进程来应答；`--mode stdio` 改成客户端拉起二进制。bearer 默认只从 `~/.vibrev/token` 抄进**全局** HTTP 配置（项目级文件会进 git）。`--with-token` 连 project 一起写；`--no-token` 全局也不写。监听面本身不能关鉴权，条目里没有 Authorization 的客户端会 401：
 
 ```jsonc
 "vibrev-ida": {
@@ -86,10 +87,13 @@ jadx 没有监听端口，仍然是客户端拉起的 stdio：
 
 HTTP 引擎要自己启动（`ida-headless-mcp` / `bn-headless-mcp`）；默认绑 `127.0.0.1:8765`。
 
-两个 flag 值得知道:
+几个 flag 值得知道:
 
 - `--delegate` 把写入交给客户端自己的 CLI(`claude` / `codex` / `code`)而不是直接改文件。**默认关闭**,因为它有损:`codex mcp add` 会把 `~/.codex/config.toml` 重新序列化,抹掉 `[mcp_servers]` 段里的注释。
 - `--no-skills` 只写 MCP 条目。skill 装到 `~/.claude/skills`,只有 Claude Code 会读;没有 `.vibrev-skill.json` 标记的目录既不覆盖也不删除。
+- `--mode http|stdio` 选择传输。HTTP 是默认；没有监听面的引擎（jadx）两种都写 stdio。
+- `--with-token` / `--no-token` 覆盖「project 不写 bearer、global 写」这条默认。两者互斥，也和 `--mode stdio` 互斥。
+- `--scope global` 写本机全局文件。默认是 project。
 
 ## `vibrev-kit`
 

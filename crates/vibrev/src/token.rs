@@ -12,8 +12,10 @@
 //! part that is genuinely the installer's: which client config files hold a
 //! token of ours, and what happens to them.
 //!
-//! Project-scope files are scanned so we can *report* them, but they never
-//! receive a token.
+//! Project-scope files that already carry one of our tokens are rewritten
+//! like global ones: `--with-token` put the credential there, and leaving the
+//! old value in place after a rotation would 401 the client. Files that have
+//! the URL and no header are left alone — rotate does not inject a token.
 
 use anyhow::{Result, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -82,7 +84,6 @@ pub struct Report {
     pub previous_exposed: bool,
     pub rewritten: Vec<Hit>,
     pub failed: Vec<Fail>,
-    pub skipped_project: Vec<Hit>,
     pub would_break: Vec<Hit>,
     pub expired_old: bool,
     pub expire_refused: bool,
@@ -107,7 +108,6 @@ impl Report {
                 "scope": f.scope.as_str(),
                 "error": f.reason,
             })).collect::<Vec<_>>(),
-            "skippedProject": self.skipped_project.iter().map(Hit::to_json).collect::<Vec<_>>(),
             "wouldBreak": self.would_break.iter().map(Hit::to_json).collect::<Vec<_>>(),
             "expiredOld": self.expired_old,
             "expireRefused": self.expire_refused,
@@ -133,7 +133,7 @@ impl Report {
             ));
         }
 
-        if self.rewritten.is_empty() && self.failed.is_empty() && self.skipped_project.is_empty() {
+        if self.rewritten.is_empty() && self.failed.is_empty() {
             out.push_str("  没有需要回写的 HTTP 客户端配置。\n");
         }
 
@@ -146,6 +146,9 @@ impl Report {
                     h.servers.join(" ")
                 ));
             }
+            if self.rewritten.iter().any(|h| h.scope.version_controlled()) {
+                out.push_str("  其中含项目文件：新 token 会进 git。泄漏后用 --expire-old 作废。\n");
+            }
         }
         if !self.failed.is_empty() {
             out.push_str("\n回写失败:\n");
@@ -153,16 +156,6 @@ impl Report {
                 out.push_str(&format!("  {}  {}\n", paths.abbreviate(&f.file), f.reason));
             }
             out.push_str("旧 token 仍保留在 token 文件中，因此未回写成功的客户端不会掉线。\n");
-        }
-        if !self.skipped_project.is_empty() {
-            out.push_str("\n项目作用域未写入 token:\n");
-            for h in &self.skipped_project {
-                out.push_str(&format!(
-                    "  {}  {}  仍持有旧 token\n",
-                    paths.abbreviate(&h.file),
-                    h.servers.join(" ")
-                ));
-            }
         }
 
         if self.expired_old || self.expire_refused {
@@ -249,7 +242,6 @@ pub fn rotate(paths: &Paths, env: &Env, expire: ExpireOld) -> Result<Report> {
 
     let mut rewritten = Vec::new();
     let mut failed = Vec::new();
-    let mut skipped_project = Vec::new();
 
     for c in client::CLIENTS {
         for scope in Scope::ALL {
@@ -262,7 +254,6 @@ pub fn rotate(paths: &Paths, env: &Env, expire: ExpireOld) -> Result<Report> {
             match rewrite_file(c, scope, &file, paths, &previous, &current) {
                 Ok(FileOutcome::Unchanged) => {}
                 Ok(FileOutcome::Rewritten(hit)) => rewritten.push(hit),
-                Ok(FileOutcome::SkippedProject(hit)) => skipped_project.push(hit),
                 Err(reason) => failed.push(Fail {
                     file,
                     client: c.id,
@@ -300,7 +291,6 @@ pub fn rotate(paths: &Paths, env: &Env, expire: ExpireOld) -> Result<Report> {
             .any(|warning| matches!(warning, shared::Warning::WorldReadable { .. })),
         rewritten,
         failed,
-        skipped_project,
         would_break,
         expired_old,
         expire_refused,
@@ -310,7 +300,6 @@ pub fn rotate(paths: &Paths, env: &Env, expire: ExpireOld) -> Result<Report> {
 enum FileOutcome {
     Unchanged,
     Rewritten(Hit),
-    SkippedProject(Hit),
 }
 
 fn rewrite_file(
@@ -339,14 +328,10 @@ fn rewrite_file(
         servers: matching.clone(),
     };
 
-    // A project-scope file is what git commits. Replacing the old token with the
-    // new one would leak the *current* credential into history.
-    if scope.version_controlled() {
-        return Ok(FileOutcome::SkippedProject(hit));
-    }
-
     let _lock = atomic::lock(file, paths).map_err(|e| format!("{e:#}"))?;
-    atomic::backup(file, false, paths).map_err(|e| format!("{e:#}"))?;
+    // Project-scope backups leave the repository, same as install: the old
+    // token is still in the copy, and a sibling `.bak` would be committed.
+    atomic::backup(file, scope.version_controlled(), paths).map_err(|e| format!("{e:#}"))?;
     let changed = doc.rewrite_owned_http_bearers(client, old, new);
     if changed.is_empty() {
         return Err("识别到旧 token 但未能改写 Authorization".to_owned());
@@ -400,9 +385,8 @@ fn configs_still_on(env: &Env, old: &[String]) -> Vec<Hit> {
 
 /// The current bearer, creating the file on first use.
 ///
-/// `install` writes this into global HTTP entries so the client can talk to a
-/// listener the operator started. The file is the same one `rotate` and every
-/// engine open.
+/// `install` copies this into HTTP entries when [`crate::install::TokenWrite`]
+/// says so. The file is the same one `rotate` and every engine open.
 pub fn current(paths: &Paths) -> Result<String> {
     let file = token_file(paths);
     let loaded = shared::load_or_create(file.as_std_path()).map_err(describe)?;
@@ -588,20 +572,55 @@ mod tests {
     }
 
     #[test]
-    fn project_scope_does_not_gain_a_token() {
-        let (paths, env, _) = setup("token-project-skip");
+    fn project_scope_with_a_token_is_rewritten() {
+        let (paths, env, _) = setup("token-project-rewrite");
         seed_token(&paths, &["vbr_OLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOL"]);
         let proj = env.cwd.join(".mcp.json");
         std::fs::write(&proj, http_entry("vbr_OLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOL")).unwrap();
 
         let report = rotate(&paths, &env, ExpireOld::Keep).unwrap();
-        assert!(report.rewritten.is_empty());
-        assert_eq!(report.skipped_project.len(), 1);
+        assert!(report.ok(), "{report:?}");
+        assert_eq!(report.rewritten.len(), 1);
+        assert_eq!(report.rewritten[0].scope, Scope::Project);
         let after = std::fs::read_to_string(&proj).unwrap();
         assert!(
-            after.contains("vbr_OLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOL"),
-            "project file was rewritten:\n{after}"
+            after.contains(&format!("Bearer {}", report.current)),
+            "{after}"
         );
+        assert!(
+            !after.contains("vbr_OLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOL"),
+            "{after}"
+        );
+        assert!(
+            report.render(&paths).contains("其中含项目文件"),
+            "{}",
+            report.render(&paths)
+        );
+    }
+
+    #[test]
+    fn project_scope_without_a_token_is_not_injected() {
+        let (paths, env, _) = setup("token-project-no-inject");
+        seed_token(&paths, &["vbr_OLDOLDOLDOLDOLDOLDOLDOLDOLDOLDOL"]);
+        let proj = env.cwd.join(".mcp.json");
+        std::fs::write(
+            &proj,
+            r#"{
+  "mcpServers": {
+    "vibrev-ida": {
+      "type": "http",
+      "url": "http://127.0.0.1:8745/mcp"
+    }
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let report = rotate(&paths, &env, ExpireOld::Keep).unwrap();
+        assert!(report.rewritten.is_empty());
+        let after = std::fs::read_to_string(&proj).unwrap();
+        assert!(!after.contains("Authorization"), "{after}");
         assert!(!after.contains(&report.current), "{after}");
     }
 

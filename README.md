@@ -27,8 +27,9 @@ They belong together because the interesting bugs live between them: a token fil
 
 ```bash
 vibrev doctor                      # what is installed, where, and what version
-vibrev install --all               # write MCP entries (and skills) for every engine found
-vibrev install ida --client claude-code
+vibrev install --all               # project-scope HTTP (and skills) for every engine found
+vibrev install ida --mode stdio    # client spawns the binary instead of connecting to a listener
+vibrev install ida --scope global --client claude-code
 vibrev list                        # which clients currently hold a vibrev entry
 vibrev uninstall                   # no engine named = remove every vibrev-* entry
 vibrev skill list                  # skills each engine offers, and their local state
@@ -64,11 +65,11 @@ The root is `~/.vibrev`, overridable with `VIBREV_HOME`. The installer and the e
 | `claude-code` | Claude Code | `~/.claude.json` | `./.mcp.json` | JSON |
 | `cursor` | Cursor | `~/.cursor/mcp.json` | `./.cursor/mcp.json` | JSON |
 | `vscode` | VS Code | `<config>/Code/User/mcp.json` | `./.vscode/mcp.json` | JSONC |
-| `codex` | Codex | `~/.codex/config.toml` | — (no per-repo file) | TOML |
+| `codex` | Codex | `~/.codex/config.toml` | `./.codex/config.toml` | TOML |
 
 Edits are **format-preserving**: a `serde_json` round-trip would delete every comment in VS Code's `mcp.json`, so the JSONC and TOML paths go through `jsonc-parser` and `toml_edit` instead. Writes are atomic (temp file + rename) under an advisory lock, with a one-time `.bak` at mode 0600.
 
-IDA and BN `serve` default to HTTP, so `install` writes a URL the operator's own process is expected to answer. The bearer is copied from `~/.vibrev/token` into **global** client configs only (project-scope files are committed):
+`install` defaults to **project** scope and **`--mode http`**. IDA and BN get a URL the operator's own process is expected to answer; `--mode stdio` writes a spawn instead. The bearer is copied from `~/.vibrev/token` into **global** HTTP entries by default (project-scope files are committed). `--with-token` writes it at project scope too; `--no-token` leaves it out of every file. The listener cannot be run unauthenticated, so a client entry with no `Authorization` header will 401:
 
 ```jsonc
 "vibrev-ida": {
@@ -86,10 +87,13 @@ jadx has no listener, so it stays a stdio spawn:
 
 Start the HTTP engines yourself (`ida-headless-mcp` / `bn-headless-mcp`); they bind `127.0.0.1:8765` unless told otherwise.
 
-Two flags are worth knowing:
+A few flags are worth knowing:
 
 - `--delegate` hands the write to the client's own CLI (`claude` / `codex` / `code`) instead of editing the file. It is **off by default** because it is lossy: `codex mcp add` reserializes `~/.codex/config.toml` and wipes the comments in its `[mcp_servers]` section.
 - `--no-skills` writes MCP entries only. Skills go to `~/.claude/skills`; only Claude Code reads them, and a directory without the `.vibrev-skill.json` marker is never overwritten or deleted.
+- `--mode http|stdio` chooses the transport. HTTP is the default; engines with no listener (jadx) stay stdio either way.
+- `--with-token` / `--no-token` override the default of "bearer in global files, not in project files". They conflict with each other, and with `--mode stdio`.
+- `--scope global` writes the machine-wide files. Default is project.
 
 ## `vibrev-kit`
 

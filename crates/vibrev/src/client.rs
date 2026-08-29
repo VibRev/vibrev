@@ -95,8 +95,9 @@ pub enum ServerSpec {
         name: String,
         engine: &'static str,
         url: String,
-        /// Absent when the file is version-controlled: the URL still goes in so
-        /// the client knows where to connect, the token stays out of git.
+        /// Absent when this run was told not to copy the bearer — by default
+        /// that is every version-controlled file. The URL still goes in so the
+        /// client knows where to connect.
         token: Option<String>,
     },
 }
@@ -317,7 +318,7 @@ impl Env {
 
 impl Client {
     /// Where this client keeps `scope`'s servers, or `None` when it has no such
-    /// level at all (Codex is machine-global only).
+    /// level at all.
     pub fn file(&self, scope: Scope, env: &Env) -> Option<Utf8PathBuf> {
         Some(match (self.id, scope) {
             ("claude-code", Scope::Global) => env.home.join(".claude.json"),
@@ -330,9 +331,10 @@ impl Client {
             ("vscode", Scope::Project) => env.cwd.join(".vscode").join("mcp.json"),
 
             ("codex", Scope::Global) => env.home.join(".codex").join("config.toml"),
-            // Codex reads only `~/.codex/config.toml`; there is no per-repo file
-            // to write, and inventing one would be a file nothing ever reads.
-            ("codex", Scope::Project) => return None,
+            // Same TOML as the user file, in the repository. Codex reads
+            // `.codex/config.toml` from the project root the way it reads
+            // `~/.codex/config.toml` globally.
+            ("codex", Scope::Project) => env.cwd.join(".codex").join("config.toml"),
 
             _ => return None,
         })
@@ -371,6 +373,9 @@ impl Client {
         match (self.id, scope) {
             // `code --add-mcp` only ever writes the user profile.
             ("vscode", Scope::Project) => return None,
+            // `codex mcp add` writes `~/.codex/config.toml`. Project scope is
+            // `.codex/config.toml` in the repo, which only the direct writer hits.
+            ("codex", Scope::Project) => return None,
             // `claude mcp add` mis-parses arguments that look like Windows switches
             // (anthropics/claude-code#4158: `/c` becomes `C:/`). Engine argv is
             // ours and currently safe, but the failure is silent corruption of the
@@ -591,10 +596,10 @@ mod tests {
     }
 
     #[test]
-    fn codex_has_no_project_scope() {
-        let c = by_id("codex").unwrap();
-        assert!(c.file(Scope::Project, &env()).is_none());
-        assert!(c.file(Scope::Global, &env()).is_some());
+    fn every_client_resolves_a_project_file() {
+        for c in CLIENTS {
+            assert!(c.file(Scope::Project, &env()).is_some(), "{}", c.id);
+        }
     }
 
     #[test]
@@ -624,6 +629,10 @@ mod tests {
         assert_eq!(
             f("codex", Scope::Global).as_deref(),
             Some("/home/u/.codex/config.toml")
+        );
+        assert_eq!(
+            f("codex", Scope::Project).as_deref(),
+            Some("/work/proj/.codex/config.toml")
         );
     }
 
@@ -717,6 +726,13 @@ mod tests {
     #[test]
     fn vscode_project_scope_is_never_delegated() {
         let c = by_id("vscode").unwrap();
+        assert!(c.delegate(Scope::Project).is_none());
+    }
+
+    #[test]
+    fn codex_project_scope_is_never_delegated() {
+        // `codex mcp add` writes ~/.codex/config.toml, not the repo file.
+        let c = by_id("codex").unwrap();
         assert!(c.delegate(Scope::Project).is_none());
     }
 

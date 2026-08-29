@@ -294,9 +294,10 @@ impl Doc {
     /// Replace `Authorization: Bearer <old>` with the new current token on every
     /// vibrev-owned HTTP entry that still carries one of `old`.
     ///
-    /// Returns the entry names that actually changed. Project-scope callers must
-    /// not write the result: putting a token into a file that gets committed is
-    /// forbidden, even when that file already had a different one.
+    /// Returns the entry names that actually changed. Callers that write the
+    /// result into a version-controlled file are putting a live token where git
+    /// will commit it; `token rotate` does so only for entries that already
+    /// carried one of ours.
     pub fn rewrite_owned_http_bearers(
         &mut self,
         client: &Client,

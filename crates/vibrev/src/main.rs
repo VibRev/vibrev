@@ -143,8 +143,8 @@ struct InstallArgs {
     #[arg(long = "client", value_name = "NAME", value_parser = PossibleValuesParser::new(client::ids()))]
     clients: Vec<String>,
 
-    /// 写入哪一级配置：global 是本机全部项目，project 是当前目录下的文件
-    #[arg(long, default_value = "global", value_parser = PossibleValuesParser::new(["global", "project"]))]
+    /// 写入哪一级配置：project 是当前目录下的文件，global 是本机全部项目
+    #[arg(long, default_value = "project", value_parser = PossibleValuesParser::new(["global", "project"]))]
     scope: String,
 
     /// 只预览，不写入任何文件
@@ -165,6 +165,21 @@ struct InstallArgs {
     /// 对 vibrev skill install / uninstall 无意义，那两条命令本来就只动 skill
     #[arg(long)]
     no_skills: bool,
+
+    /// 把 HTTP bearer 写入客户端配置，包括会被 git 提交的 project 文件。
+    /// 默认只写 global：project 文件进仓库，删工作区不等于没泄漏。
+    #[arg(long, conflicts_with = "no_token")]
+    with_token: bool,
+
+    /// 不把 HTTP bearer 写入客户端配置，global 也不写。
+    /// 条目只有 URL；没有 Authorization 的客户端会 401。监听面本身不能关鉴权。
+    #[arg(long, conflicts_with = "with_token")]
+    no_token: bool,
+
+    /// 写入哪种传输：http 是 URL（默认），stdio 是客户端拉起二进制。
+    /// 引擎没有监听面时，http 仍写 stdio。
+    #[arg(long, default_value = "http", value_parser = PossibleValuesParser::new(["http", "stdio"]))]
+    mode: String,
 }
 
 impl InstallArgs {
@@ -178,6 +193,18 @@ impl InstallArgs {
                 json,
                 "usage",
                 "vibrev skill 只处理 skill，--no-skills 会让它无事可做",
+                &[],
+            )
+        }
+        let transport: crate::install::Transport = self
+            .mode
+            .parse()
+            .unwrap_or_else(|e: String| fail(json, "usage", &e, &[]));
+        if transport == crate::install::Transport::Stdio && (self.with_token || self.no_token) {
+            fail(
+                json,
+                "usage",
+                "--with-token / --no-token 只对 HTTP 条目有意义，不能和 --mode stdio 一起用",
                 &[],
             )
         }
@@ -195,6 +222,18 @@ impl InstallArgs {
             } else {
                 mode
             },
+            token: match (self.with_token, self.no_token) {
+                (true, false) => crate::install::TokenWrite::Always,
+                (false, true) => crate::install::TokenWrite::Never,
+                (false, false) => crate::install::TokenWrite::Auto,
+                (true, true) => fail(
+                    json,
+                    "usage",
+                    "--with-token 与 --no-token 不能同时使用",
+                    &[],
+                ),
+            },
+            transport,
         }
     }
 }
@@ -365,9 +404,12 @@ fn after_help() -> String {
     s.push_str("\n示例:\n");
     s.push_str("  vibrev doctor\n");
     s.push_str("  vibrev engine list --json\n");
-    s.push_str("  vibrev install --all --dry-run                 # 先看看会改什么\n");
+    s.push_str("  vibrev install --all --dry-run                 # 先看看会改什么（默认 project + HTTP）\n");
     s.push_str("  vibrev install jadx --client cursor --yes\n");
-    s.push_str("  vibrev install --all --scope project --yes     # 写进当前仓库\n");
+    s.push_str("  vibrev install ida --mode stdio --yes          # 客户端拉起二进制，不连监听面\n");
+    s.push_str("  vibrev install ida --scope global --yes        # 写进本机全局配置\n");
+    s.push_str("  vibrev install ida --with-token --yes         # project HTTP 也写入 bearer\n");
+    s.push_str("  vibrev install ida --no-token --scope global --yes  # HTTP 条目只有 URL\n");
     s.push_str("  vibrev install ida --no-skills                 # 只写 MCP 条目，不装 skill\n");
     s.push_str("  vibrev skill install ida --yes                 # 引擎升级后单独刷新 skill\n");
     s.push_str("  vibrev uninstall ida\n");

@@ -1,7 +1,10 @@
 //! `vibrev install` / `uninstall` / `list` — registering engines with MCP clients.
 //!
-//! What gets written depends on the engine. IDA and BN `serve` default to HTTP,
-//! so their entry is a URL the operator's own process is expected to answer:
+//! What gets written depends on the engine and on `--mode`. Default is HTTP:
+//! IDA and BN get a URL the operator's own process is expected to answer.
+//! `--mode stdio` writes a spawn instead, using the same argv the identity
+//! probe uses. jadx has no listener, so it stays a stdio spawn even under
+//! `--mode http`:
 //!
 //! ```jsonc
 //! "vibrev-ida": {
@@ -11,17 +14,19 @@
 //! }
 //! ```
 //!
-//! jadx has no listener, so it stays a stdio spawn:
-//!
 //! ```jsonc
 //! "vibrev-jadx": { "command": "~/.vibrev/engines/rjadx", "args": ["mcp", "--stdio"] }
 //! ```
 //!
 //! One entry per engine is what lets a user turn `vibrev-ida` off in their client
-//! without losing `vibrev-jadx`. The bearer lives in `~/.vibrev/token` and is
-//! copied into **global** HTTP entries only. Project-scope files are committed;
-//! writing a token there would leak it, so those entries get the URL and not the
-//! header — see [`credential_warning`].
+//! without losing `vibrev-jadx`. The bearer lives in `~/.vibrev/token`. By default
+//! it is copied into **global** HTTP entries only: project-scope files are
+//! committed, and a secret in git history is not undone by deleting the working
+//! tree. `--with-token` writes it there anyway; `--no-token` leaves it out of
+//! every file, global included. The listener still requires a bearer either way
+//! — omitting the header from the client file is not a way to serve
+//! unauthenticated. Stripping a leftover credential from a committed file is
+//! reported by [`credential_warning`].
 //!
 //! Two write paths. Both are supported and both are tested, but they are not
 //! equals — the direct write is the default:
@@ -86,6 +91,86 @@ pub struct Options {
     pub delegate: bool,
     /// Whether this run touches the MCP entry, the skill directories, or both.
     pub skills: SkillMode,
+    /// Whether HTTP entries receive a copy of the shared bearer.
+    pub token: TokenWrite,
+    /// Which transport to write. `--mode http` is the default; `--mode stdio`
+    /// writes a spawn instead.
+    pub transport: Transport,
+}
+
+/// Which transport `install` writes into the client config.
+///
+/// Distinct from what the engine does if you launch `serve` by hand. IDA and BN
+/// listen on HTTP by default, but a client can still spawn them over stdio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Transport {
+    /// HTTP when the engine has a listener; stdio otherwise. The default.
+    #[default]
+    Http,
+    /// Client spawns the binary. Valid for every engine.
+    Stdio,
+}
+
+impl Transport {
+    fn spec(
+        self,
+        eng: &'static Engine,
+        located: &Located,
+        scope: Scope,
+        token: TokenWrite,
+        paths: &Paths,
+    ) -> Result<ServerSpec> {
+        match (self, eng.http) {
+            (Self::Stdio, _) | (Self::Http, None) => {
+                Ok(ServerSpec::stdio(eng, &located.path, &located.mcp_args))
+            }
+            (Self::Http, Some(url)) if token.include(scope) => Ok(ServerSpec::http(
+                eng,
+                url,
+                Some(crate::token::current(paths)?),
+            )),
+            (Self::Http, Some(url)) => Ok(ServerSpec::http(eng, url, None)),
+        }
+    }
+}
+
+impl std::str::FromStr for Transport {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "http" => Ok(Self::Http),
+            "stdio" => Ok(Self::Stdio),
+            other => Err(format!("未知的传输 {other}（可用: http / stdio）")),
+        }
+    }
+}
+
+/// Whether `install` copies the HTTP bearer into the client config.
+///
+/// The listener always requires a token; this only decides whether the *client
+/// file* carries a copy. Project-scope files are committed, so the default
+/// keeps the bearer out of them. `--with-token` / `--no-token` override that
+/// per run rather than inventing a second default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TokenWrite {
+    /// Write the bearer only into files that are not version-controlled.
+    #[default]
+    Auto,
+    /// Write the bearer into every HTTP entry this run touches.
+    Always,
+    /// Leave the bearer out of every HTTP entry this run touches.
+    Never,
+}
+
+impl TokenWrite {
+    pub fn include(self, scope: Scope) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::Auto => !scope.version_controlled(),
+        }
+    }
 }
 
 /// Which of the two halves of an install a run is doing.
@@ -477,7 +562,9 @@ fn resolve_engines(opts: &Options, cfg: &Config, paths: &Paths) -> Result<Vec<Re
         match discover::locate(eng, cfg, paths) {
             Outcome::Found(l) => resolved.push(Resolved {
                 engine: eng,
-                spec: client_spec(eng, &l, opts.scope, paths)?,
+                spec: opts
+                    .transport
+                    .spec(eng, &l, opts.scope, opts.token, paths)?,
                 located: Some(l),
             }),
             // `--all` means "everything you can find", so a missing engine is
@@ -516,27 +603,6 @@ fn resolve_engines(opts: &Options, cfg: &Config, paths: &Paths) -> Result<Vec<Re
 fn lookup(id: &str) -> Result<&'static Engine> {
     engine::by_id(id)
         .ok_or_else(|| anyhow::anyhow!("未知的引擎 {id}（可用: {}）", engine::ids().join(" / ")))
-}
-
-/// The entry `install` writes for this engine.
-///
-/// HTTP engines get a URL; the bearer is copied in only when the file is not
-/// going to be committed. Stdio engines still spawn from the discovered binary.
-fn client_spec(
-    eng: &'static Engine,
-    located: &Located,
-    scope: Scope,
-    paths: &Paths,
-) -> Result<ServerSpec> {
-    match eng.http {
-        Some(url) if scope.version_controlled() => Ok(ServerSpec::http(eng, url, None)),
-        Some(url) => Ok(ServerSpec::http(
-            eng,
-            url,
-            Some(crate::token::current(paths)?),
-        )),
-        None => Ok(ServerSpec::stdio(eng, &located.path, &located.mcp_args)),
-    }
 }
 
 fn resolve_clients(opts: &Options, env: &Env) -> Result<Vec<&'static Client>> {
@@ -911,6 +977,7 @@ fn render(plan: &Plan, paths: &Paths, env: &Env, color: bool) -> String {
     // Last thing before the confirmation prompt, because it is the one item here
     // that stays actionable after the write succeeds.
     out.push_str(&credential_warning(plan, paths, &bold));
+    out.push_str(&token_write_warning(plan, paths, &bold));
 
     if !plan.skips.is_empty() {
         out.push_str(&format!("{}\n", bold("已跳过")));
@@ -1071,6 +1138,68 @@ fn credential_warning(plan: &Plan, paths: &Paths, bold: &dyn Fn(&str) -> String)
         out.push_str("    3. 备份副本里仍有原值（见下方备份路径），确认无需回滚后删掉它\n");
     }
     out.push('\n');
+    out
+}
+
+/// What this run is about to do with the bearer, when that is not the default.
+///
+/// Two cases, both easy to miss in a diff: writing a live token into a file
+/// that git commits, and writing an HTTP URL with no header while the listener
+/// still 401s without one. [`credential_warning`] covers the opposite motion
+/// (a leftover header being removed).
+fn token_write_warning(plan: &Plan, paths: &Paths, bold: &dyn Fn(&str) -> String) -> String {
+    let http: Vec<(&Action, &Change, Option<&str>)> = plan
+        .actions
+        .iter()
+        .flat_map(|a| {
+            a.changes.iter().filter_map(move |c| match &c.spec {
+                Some(ServerSpec::Http { token, .. }) if c.op.writes() => {
+                    Some((a, c, token.as_deref()))
+                }
+                _ => None,
+            })
+        })
+        .collect();
+    if http.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    let into_repo: Vec<_> = http
+        .iter()
+        .filter(|(a, _, token)| a.scope.version_controlled() && token.is_some())
+        .collect();
+    if !into_repo.is_empty() {
+        out.push_str(&format!("{}\n", bold("⚠ 凭据将写入项目文件")));
+        for (a, c, _) in &into_repo {
+            out.push_str(&format!(
+                "  {} 的 {} —— Authorization header 会写进这个文件\n",
+                paths.abbreviate(&a.file),
+                c.server
+            ));
+        }
+        out.push_str("\n  该作用域的文件会提交进 git。提交一次，凭据就留在历史里。\n");
+        out.push_str("  默认不写；这次是因为 --with-token。\n");
+        out.push_str("  泄漏后用 vibrev token rotate --expire-old 作废，删工作区不够。\n\n");
+    }
+
+    let omitting: Vec<_> = http
+        .iter()
+        .filter(|(_, _, token)| token.is_none())
+        .collect();
+    if !omitting.is_empty() {
+        out.push_str(&format!("{}\n", bold("⚠ 未写入 Authorization")));
+        for (a, c, _) in &omitting {
+            out.push_str(&format!(
+                "  {} 的 {} —— 只有 URL，没有 bearer\n",
+                paths.abbreviate(&a.file),
+                c.server
+            ));
+        }
+        out.push_str("\n  HTTP 监听面要求 bearer，没有这个 header 的客户端会 401。\n");
+        out.push_str("  需要写入凭据：vibrev install --with-token\n");
+        out.push_str("  token 在 ~/.vibrev/token（可用 VIBREV_HOME 覆盖）。\n\n");
+    }
     out
 }
 
@@ -1510,7 +1639,81 @@ mod tests {
             delegate: false,
             // These tests are about the MCP entry; the skill half has its own.
             skills: SkillMode::Without,
+            token: TokenWrite::Auto,
+            transport: Transport::Http,
         }
+    }
+
+    #[test]
+    fn transport_parses() {
+        assert_eq!("http".parse::<Transport>().unwrap(), Transport::Http);
+        assert_eq!("stdio".parse::<Transport>().unwrap(), Transport::Stdio);
+        assert!("sse".parse::<Transport>().is_err());
+    }
+
+    #[test]
+    fn token_write_include_follows_scope_unless_overridden() {
+        assert!(TokenWrite::Auto.include(Scope::Global));
+        assert!(!TokenWrite::Auto.include(Scope::Project));
+        assert!(TokenWrite::Always.include(Scope::Project));
+        assert!(TokenWrite::Always.include(Scope::Global));
+        assert!(!TokenWrite::Never.include(Scope::Global));
+        assert!(!TokenWrite::Never.include(Scope::Project));
+    }
+
+    fn located(eng: &'static Engine, path: &str) -> crate::discover::Located {
+        crate::discover::Located {
+            path: path.into(),
+            origin: crate::discover::Origin::Path,
+            mcp_args: eng.mcp_args.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn stdio_transport_spawns_an_http_engine() {
+        let (paths, _root) = {
+            let root = scratch("transport-stdio");
+            let paths = Paths {
+                root: root.join("vibrev"),
+                home: Some(root.clone()),
+            };
+            std::fs::create_dir_all(&paths.root).unwrap();
+            (paths, root)
+        };
+        let eng = engine::by_id("ida").unwrap();
+        let loc = located(eng, "/opt/ida-headless-mcp");
+        let spec = Transport::Stdio
+            .spec(eng, &loc, Scope::Project, TokenWrite::Auto, &paths)
+            .unwrap();
+        match spec {
+            ServerSpec::Stdio { command, args, .. } => {
+                assert_eq!(command, "/opt/ida-headless-mcp");
+                assert_eq!(args, ["serve", "--mode", "stdio"]);
+            }
+            other => panic!("expected stdio, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn http_transport_falls_back_to_stdio_when_the_engine_has_no_listener() {
+        let (paths, _root) = {
+            let root = scratch("transport-jadx");
+            let paths = Paths {
+                root: root.join("vibrev"),
+                home: Some(root.clone()),
+            };
+            std::fs::create_dir_all(&paths.root).unwrap();
+            (paths, root)
+        };
+        let eng = engine::by_id("jadx").unwrap();
+        let loc = located(eng, "/opt/rjadx");
+        let spec = Transport::Http
+            .spec(eng, &loc, Scope::Project, TokenWrite::Always, &paths)
+            .unwrap();
+        assert!(
+            matches!(spec, ServerSpec::Stdio { .. }),
+            "jadx has no HTTP listener: {spec:?}"
+        );
     }
 
     #[test]
@@ -1635,20 +1838,23 @@ mod tests {
     }
 
     #[test]
-    fn codex_is_skipped_for_project_scope() {
+    fn codex_project_scope_writes_the_repo_toml() {
         let (env, paths, _root) = fixture("install-codex-project", &[]);
         let codex = client::by_id("codex").unwrap();
         let plan = build(
             &opts(Kind::Install, Scope::Project),
             &[codex],
-            &[spec("jadx", "/opt/rjadx", &[])],
+            &[spec("jadx", "/opt/rjadx", &["mcp", "--stdio"])],
             &env,
             &paths,
         )
         .unwrap();
-        assert!(plan.actions.is_empty());
-        assert_eq!(plan.skips.len(), 1);
-        assert!(plan.skips[0].reason.contains("没有项目级作用域"));
+        assert!(plan.skips.is_empty(), "{:?}", plan.skips);
+        assert_eq!(plan.actions[0].file, env.cwd.join(".codex/config.toml"));
+        apply(&plan, &paths).unwrap();
+        let body = std::fs::read_to_string(env.cwd.join(".codex/config.toml")).unwrap();
+        assert!(body.contains("[mcp_servers.vibrev-jadx]"), "{body}");
+        assert!(!env.home.join(".codex/config.toml").exists());
     }
 
     #[test]

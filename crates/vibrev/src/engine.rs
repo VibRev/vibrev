@@ -25,9 +25,9 @@ pub struct Engine {
     pub mcp_args: &'static [&'static str],
     /// Client-facing listener, if this engine's `serve` defaults to HTTP.
     ///
-    /// `None` means `install` writes a stdio entry and the client spawns the
-    /// binary. `Some` means `install` writes that URL and the operator starts
-    /// the process themselves; the identity probe still uses `mcp_args`.
+    /// `None` means `install` cannot write HTTP and stays on a stdio spawn.
+    /// `Some` is the URL `--mode http` (the default) writes; `--mode stdio`
+    /// still uses `mcp_args`. The identity probe always uses `mcp_args`.
     pub http: Option<&'static str>,
     /// Argv that makes the engine describe the agent skills it carries, minus the
     /// trailing `--json`. Empty means it ships none and the probe is skipped
