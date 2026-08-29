@@ -1,14 +1,15 @@
-//! The MCP client registry — the one place that knows where the four supported
-//! clients keep their server lists and what shape an entry takes there.
+//! The MCP client registry — the one place that knows where each supported
+//! client keeps its server list and what shape an entry takes there.
 //!
 //! An entry is either stdio (`command` + `args`, the client spawns the binary) or
 //! HTTP (`url` + optional bearer, the operator starts the listener). [`ServerSpec`]
-//! is that choice, rendered into all four dialects.
+//! is that choice, rendered into the client's dialect.
 //!
-//! The four differ in every axis that matters, which is why this is data and not a
-//! trait: top-level key (`mcpServers` / `servers` / `mcp_servers`), file format
-//! (JSON / JSONC / TOML), file location, and whether a first-party CLI exists to
-//! delegate to.
+//! Clients differ in every axis that matters, which is why this is data and not a
+//! trait: top-level key (`mcpServers` / `servers` / `mcp_servers` /
+//! `context_servers`), file format (JSON / JSONC / TOML), file location, and
+//! whether a first-party CLI exists to delegate to. Paths live on [`Client`]
+//! too — a match on `id` is how a fourth client used to sneak in a fifth path.
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -173,6 +174,29 @@ pub enum SkillSupport {
     Unsupported(&'static str),
 }
 
+/// A config file (or detection mark) resolved against [`Env`].
+#[derive(Debug, Clone, Copy)]
+enum ConfigPath {
+    /// `$HOME/<segments>`
+    Home(&'static [&'static str]),
+    /// Platform app-config dir: `~/Library/Application Support` on macOS,
+    /// `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` (else `~/.config`) on Linux.
+    App(&'static [&'static str]),
+    /// `$CWD/<segments>`
+    Project(&'static [&'static str]),
+}
+
+impl ConfigPath {
+    fn resolve(self, env: &Env) -> Utf8PathBuf {
+        let (base, segs) = match self {
+            Self::Home(segs) => (&env.home, segs),
+            Self::App(segs) => (&env.app_config, segs),
+            Self::Project(segs) => (&env.cwd, segs),
+        };
+        segs.iter().fold(base.to_owned(), |p, s| p.join(s))
+    }
+}
+
 impl SkillSupport {
     /// Where `scope`'s skills live, or `None` when this client has none.
     fn dir(self, scope: Scope, env: &Env) -> Option<Utf8PathBuf> {
@@ -194,9 +218,11 @@ impl SkillSupport {
 pub struct Client {
     /// What a user types after `--client`.
     pub id: &'static str,
+    /// Extra names `by_id` accepts. Canonical `id` stays what tables print.
+    pub aliases: &'static [&'static str],
     /// Display name for tables and prose.
     pub label: &'static str,
-    /// The top-level table holding servers. Three keys for four clients.
+    /// The top-level table holding servers.
     pub key: &'static str,
     pub format: Format,
     /// Whether this client reads agent skills. Orthogonal to the MCP entry: a
@@ -208,29 +234,57 @@ pub struct Client {
     pub emit_type: bool,
     /// First-party CLI to delegate to, when it is on `PATH`.
     pub cli: Option<&'static str>,
+    global: ConfigPath,
+    project: Option<ConfigPath>,
+    /// Existence of any of these means the client is probably installed.
+    marks: &'static [ConfigPath],
 }
+
+const MCP_SERVERS: &str = "mcpServers";
+const NO_SKILLS: SkillSupport = SkillSupport::Unsupported("不读 Claude Code skill 目录");
+
+#[cfg(target_os = "linux")]
+const ZED_GLOBAL: ConfigPath = ConfigPath::Home(&[".config", "zed", "settings.json"]);
+#[cfg(not(target_os = "linux"))]
+const ZED_GLOBAL: ConfigPath = ConfigPath::App(&["Zed", "settings.json"]);
+#[cfg(target_os = "linux")]
+const ZED_MARK: ConfigPath = ConfigPath::Home(&[".config", "zed"]);
+#[cfg(not(target_os = "linux"))]
+const ZED_MARK: ConfigPath = ConfigPath::App(&["Zed"]);
 
 pub const CLIENTS: &[Client] = &[
     Client {
         id: "claude-code",
+        aliases: &[],
         label: "Claude Code",
-        key: "mcpServers",
+        key: MCP_SERVERS,
         format: Format::Json,
         skills: SkillSupport::ClaudeStyle,
         emit_type: true,
         cli: Some("claude"),
+        global: ConfigPath::Home(&[".claude.json"]),
+        project: Some(ConfigPath::Project(&[".mcp.json"])),
+        marks: &[
+            ConfigPath::Home(&[".claude.json"]),
+            ConfigPath::Home(&[".claude"]),
+        ],
     },
     Client {
         id: "cursor",
+        aliases: &[],
         label: "Cursor",
-        key: "mcpServers",
+        key: MCP_SERVERS,
         format: Format::Json,
         skills: SkillSupport::Unsupported("只有 .cursor/rules，不读 skill 目录"),
         emit_type: false,
         cli: None,
+        global: ConfigPath::Home(&[".cursor", "mcp.json"]),
+        project: Some(ConfigPath::Project(&[".cursor", "mcp.json"])),
+        marks: &[ConfigPath::Home(&[".cursor"])],
     },
     Client {
         id: "vscode",
+        aliases: &["vs-code"],
         label: "VS Code",
         key: "servers",
         // `mcp.json` ships with explanatory comments and users add their own; the
@@ -239,9 +293,26 @@ pub const CLIENTS: &[Client] = &[
         skills: SkillSupport::Unsupported("只有 Copilot instructions，不读 skill 目录"),
         emit_type: true,
         cli: Some("code"),
+        global: ConfigPath::App(&["Code", "User", "mcp.json"]),
+        project: Some(ConfigPath::Project(&[".vscode", "mcp.json"])),
+        marks: &[ConfigPath::App(&["Code", "User"])],
+    },
+    Client {
+        id: "vscode-insiders",
+        aliases: &["vs-code-insiders"],
+        label: "VS Code Insiders",
+        key: "servers",
+        format: Format::Jsonc,
+        skills: SkillSupport::Unsupported("只有 Copilot instructions，不读 skill 目录"),
+        emit_type: true,
+        cli: Some("code-insiders"),
+        global: ConfigPath::App(&["Code - Insiders", "User", "mcp.json"]),
+        project: Some(ConfigPath::Project(&[".vscode", "mcp.json"])),
+        marks: &[ConfigPath::App(&["Code - Insiders", "User"])],
     },
     Client {
         id: "codex",
+        aliases: &[],
         label: "Codex",
         key: "mcp_servers",
         format: Format::Toml,
@@ -250,15 +321,259 @@ pub const CLIENTS: &[Client] = &[
         // discriminator, and an unknown key is a config error there.
         emit_type: false,
         cli: Some("codex"),
+        global: ConfigPath::Home(&[".codex", "config.toml"]),
+        project: Some(ConfigPath::Project(&[".codex", "config.toml"])),
+        marks: &[ConfigPath::Home(&[".codex"])],
+    },
+    Client {
+        id: "claude-desktop",
+        aliases: &["claude-app"],
+        label: "Claude Desktop",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: SkillSupport::Unsupported("桌面应用不读 skill 目录"),
+        emit_type: true,
+        cli: None,
+        global: ConfigPath::App(&["Claude", "claude_desktop_config.json"]),
+        project: None,
+        marks: &[ConfigPath::App(&["Claude"])],
+    },
+    Client {
+        id: "windsurf",
+        aliases: &[],
+        label: "Windsurf",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".codeium", "windsurf", "mcp_config.json"]),
+        project: Some(ConfigPath::Project(&[".windsurf", "mcp.json"])),
+        marks: &[ConfigPath::Home(&[".codeium", "windsurf"])],
+    },
+    Client {
+        id: "zed",
+        aliases: &[],
+        label: "Zed",
+        key: "context_servers",
+        format: Format::Jsonc,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ZED_GLOBAL,
+        project: Some(ConfigPath::Project(&[".zed", "settings.json"])),
+        marks: &[ZED_MARK],
+    },
+    Client {
+        id: "cline",
+        aliases: &[],
+        label: "Cline",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::App(&[
+            "Code",
+            "User",
+            "globalStorage",
+            "saoudrizwan.claude-dev",
+            "settings",
+            "cline_mcp_settings.json",
+        ]),
+        project: None,
+        marks: &[ConfigPath::App(&[
+            "Code",
+            "User",
+            "globalStorage",
+            "saoudrizwan.claude-dev",
+        ])],
+    },
+    Client {
+        id: "roo",
+        aliases: &["roocode", "roo-code"],
+        label: "Roo Code",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::App(&[
+            "Code",
+            "User",
+            "globalStorage",
+            "rooveterinaryinc.roo-cline",
+            "settings",
+            "mcp_settings.json",
+        ]),
+        project: None,
+        marks: &[ConfigPath::App(&[
+            "Code",
+            "User",
+            "globalStorage",
+            "rooveterinaryinc.roo-cline",
+        ])],
+    },
+    Client {
+        id: "kilo",
+        aliases: &["kilocode", "kilo-code"],
+        label: "Kilo Code",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::App(&[
+            "Code",
+            "User",
+            "globalStorage",
+            "kilocode.kilo-code",
+            "settings",
+            "mcp_settings.json",
+        ]),
+        project: None,
+        marks: &[ConfigPath::App(&[
+            "Code",
+            "User",
+            "globalStorage",
+            "kilocode.kilo-code",
+        ])],
+    },
+    Client {
+        id: "lmstudio",
+        aliases: &["lm-studio"],
+        label: "LM Studio",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".lmstudio", "mcp.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&[".lmstudio"])],
+    },
+    Client {
+        id: "gemini",
+        aliases: &["gemini-cli"],
+        label: "Gemini CLI",
+        key: MCP_SERVERS,
+        format: Format::Jsonc,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".gemini", "settings.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&[".gemini"])],
+    },
+    Client {
+        id: "qwen",
+        aliases: &["qwen-coder"],
+        label: "Qwen Coder",
+        key: MCP_SERVERS,
+        format: Format::Jsonc,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".qwen", "settings.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&[".qwen"])],
+    },
+    Client {
+        id: "copilot",
+        aliases: &["copilot-cli"],
+        label: "Copilot CLI",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".copilot", "mcp-config.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&[".copilot"])],
+    },
+    Client {
+        id: "amazonq",
+        aliases: &["amazon-q"],
+        label: "Amazon Q",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".aws", "amazonq", "mcp_config.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&[".aws", "amazonq"])],
+    },
+    Client {
+        id: "warp",
+        aliases: &[],
+        label: "Warp",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".warp", "mcp_config.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&[".warp"])],
+    },
+    Client {
+        id: "kiro",
+        aliases: &[],
+        label: "Kiro",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".kiro", "mcp_config.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&[".kiro"])],
+    },
+    Client {
+        id: "trae",
+        aliases: &[],
+        label: "Trae",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&[".trae", "mcp_config.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&[".trae"])],
+    },
+    Client {
+        id: "crush",
+        aliases: &[],
+        label: "Crush",
+        key: MCP_SERVERS,
+        format: Format::Json,
+        skills: NO_SKILLS,
+        emit_type: false,
+        cli: None,
+        global: ConfigPath::Home(&["crush.json"]),
+        project: None,
+        marks: &[ConfigPath::Home(&["crush.json"])],
     },
 ];
 
 pub fn by_id(id: &str) -> Option<&'static Client> {
-    CLIENTS.iter().find(|c| c.id == id)
+    CLIENTS
+        .iter()
+        .find(|c| c.id == id || c.aliases.iter().copied().any(|a| a == id))
 }
 
 pub fn ids() -> Vec<&'static str> {
     CLIENTS.iter().map(|c| c.id).collect()
+}
+
+/// Canonical ids plus aliases, for clap.
+pub fn names() -> Vec<&'static str> {
+    CLIENTS
+        .iter()
+        .flat_map(|c| std::iter::once(c.id).chain(c.aliases.iter().copied()))
+        .collect()
 }
 
 /// The directories a client's paths are resolved against.
@@ -320,24 +635,10 @@ impl Client {
     /// Where this client keeps `scope`'s servers, or `None` when it has no such
     /// level at all.
     pub fn file(&self, scope: Scope, env: &Env) -> Option<Utf8PathBuf> {
-        Some(match (self.id, scope) {
-            ("claude-code", Scope::Global) => env.home.join(".claude.json"),
-            ("claude-code", Scope::Project) => env.cwd.join(".mcp.json"),
-
-            ("cursor", Scope::Global) => env.home.join(".cursor").join("mcp.json"),
-            ("cursor", Scope::Project) => env.cwd.join(".cursor").join("mcp.json"),
-
-            ("vscode", Scope::Global) => env.app_config.join("Code").join("User").join("mcp.json"),
-            ("vscode", Scope::Project) => env.cwd.join(".vscode").join("mcp.json"),
-
-            ("codex", Scope::Global) => env.home.join(".codex").join("config.toml"),
-            // Same TOML as the user file, in the repository. Codex reads
-            // `.codex/config.toml` from the project root the way it reads
-            // `~/.codex/config.toml` globally.
-            ("codex", Scope::Project) => env.cwd.join(".codex").join("config.toml"),
-
-            _ => return None,
-        })
+        match scope {
+            Scope::Global => Some(self.global.resolve(env)),
+            Scope::Project => self.project.map(|p| p.resolve(env)),
+        }
     }
 
     /// Where this client reads agent skills at `scope`, or `None` when it reads
@@ -354,14 +655,7 @@ impl Client {
         if self.cli.is_some_and(|bin| which::which(bin).is_ok()) {
             return true;
         }
-        let marks: &[Utf8PathBuf] = &match self.id {
-            "claude-code" => vec![env.home.join(".claude.json"), env.home.join(".claude")],
-            "cursor" => vec![env.home.join(".cursor")],
-            "vscode" => vec![env.app_config.join("Code").join("User")],
-            "codex" => vec![env.home.join(".codex")],
-            _ => vec![],
-        };
-        marks.iter().any(|p| p.exists())
+        self.marks.iter().any(|p| p.resolve(env).exists())
     }
 
     /// The first-party CLI, if it is installed *and* usable for this scope.
@@ -372,7 +666,7 @@ impl Client {
         let bin = self.cli?;
         match (self.id, scope) {
             // `code --add-mcp` only ever writes the user profile.
-            ("vscode", Scope::Project) => return None,
+            ("vscode" | "vscode-insiders", Scope::Project) => return None,
             // `codex mcp add` writes `~/.codex/config.toml`. Project scope is
             // `.codex/config.toml` in the repo, which only the direct writer hits.
             ("codex", Scope::Project) => return None,
@@ -453,9 +747,9 @@ impl Client {
                     tolerate_failure: false,
                 }]
             }
-            "vscode" => vec![Step {
+            "vscode" | "vscode-insiders" => vec![Step {
                 argv: vec![
-                    "code".into(),
+                    self.cli.unwrap_or("code").into(),
                     "--add-mcp".into(),
                     self.entry_json_named(spec),
                 ],
@@ -596,9 +890,13 @@ mod tests {
     }
 
     #[test]
-    fn every_client_resolves_a_project_file() {
+    fn every_client_resolves_a_project_file_or_says_it_has_none() {
         for c in CLIENTS {
-            assert!(c.file(Scope::Project, &env()).is_some(), "{}", c.id);
+            let got = c.file(Scope::Project, &env());
+            match c.project {
+                Some(_) => assert!(got.is_some(), "{}", c.id),
+                None => assert!(got.is_none(), "{}", c.id),
+            }
         }
     }
 
@@ -634,6 +932,41 @@ mod tests {
             f("codex", Scope::Project).as_deref(),
             Some("/work/proj/.codex/config.toml")
         );
+        assert_eq!(
+            f("windsurf", Scope::Global).as_deref(),
+            Some("/home/u/.codeium/windsurf/mcp_config.json")
+        );
+        assert_eq!(
+            f("windsurf", Scope::Project).as_deref(),
+            Some("/work/proj/.windsurf/mcp.json")
+        );
+        assert_eq!(
+            f("claude-desktop", Scope::Global).as_deref(),
+            Some("/home/u/.config/Claude/claude_desktop_config.json")
+        );
+        assert_eq!(f("claude-desktop", Scope::Project), None);
+        assert_eq!(
+            f("vscode-insiders", Scope::Global).as_deref(),
+            Some("/home/u/.config/Code - Insiders/User/mcp.json")
+        );
+        assert_eq!(
+            f("cline", Scope::Global).as_deref(),
+            Some(
+                "/home/u/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
+            )
+        );
+        assert_eq!(
+            f("zed", Scope::Project).as_deref(),
+            Some("/work/proj/.zed/settings.json")
+        );
+    }
+
+    #[test]
+    fn aliases_resolve_to_the_canonical_client() {
+        assert_eq!(by_id("roocode").unwrap().id, "roo");
+        assert_eq!(by_id("amazon-q").unwrap().id, "amazonq");
+        assert_eq!(by_id("vs-code-insiders").unwrap().id, "vscode-insiders");
+        assert!(by_id("not-a-client").is_none());
     }
 
     #[test]
@@ -655,14 +988,14 @@ mod tests {
                 .as_deref(),
             Some("/work/proj/.claude/skills")
         );
-        for id in ["cursor", "vscode", "codex"] {
-            let c = by_id(id).unwrap();
-            assert!(c.skills_dir(Scope::Global, &e).is_none(), "{id}");
+        for c in CLIENTS.iter().filter(|c| c.id != "claude-code") {
+            assert!(c.skills_dir(Scope::Global, &e).is_none(), "{}", c.id);
             // A skip with no reason reads as a bug, so every unsupported client
             // has to be able to say what it has instead.
             assert!(
                 matches!(c.skills, SkillSupport::Unsupported(why) if !why.is_empty()),
-                "{id} must explain why it has no skills"
+                "{} must explain why it has no skills",
+                c.id
             );
         }
     }
@@ -727,6 +1060,12 @@ mod tests {
     fn vscode_project_scope_is_never_delegated() {
         let c = by_id("vscode").unwrap();
         assert!(c.delegate(Scope::Project).is_none());
+        assert!(
+            by_id("vscode-insiders")
+                .unwrap()
+                .delegate(Scope::Project)
+                .is_none()
+        );
     }
 
     #[test]

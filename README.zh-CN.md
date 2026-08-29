@@ -65,7 +65,25 @@ vibrev ida decompile main --limit 20   # 认不出来的参数原样交给引擎
 | `claude-code` | Claude Code | `~/.claude.json` | `./.mcp.json` | JSON |
 | `cursor` | Cursor | `~/.cursor/mcp.json` | `./.cursor/mcp.json` | JSON |
 | `vscode` | VS Code | `<config>/Code/User/mcp.json` | `./.vscode/mcp.json` | JSONC |
+| `vscode-insiders` | VS Code Insiders | `<config>/Code - Insiders/User/mcp.json` | `./.vscode/mcp.json` | JSONC |
 | `codex` | Codex | `~/.codex/config.toml` | `./.codex/config.toml` | TOML |
+| `claude-desktop` | Claude Desktop | `<config>/Claude/claude_desktop_config.json` | — | JSON |
+| `windsurf` | Windsurf | `~/.codeium/windsurf/mcp_config.json` | `./.windsurf/mcp.json` | JSON |
+| `zed` | Zed | `<config>/Zed/settings.json` | `./.zed/settings.json` | JSONC |
+| `cline` | Cline | VS Code `globalStorage` | — | JSON |
+| `roo` | Roo Code | VS Code `globalStorage` | — | JSON |
+| `kilo` | Kilo Code | VS Code `globalStorage` | — | JSON |
+| `lmstudio` | LM Studio | `~/.lmstudio/mcp.json` | — | JSON |
+| `gemini` | Gemini CLI | `~/.gemini/settings.json` | — | JSONC |
+| `qwen` | Qwen Coder | `~/.qwen/settings.json` | — | JSONC |
+| `copilot` | Copilot CLI | `~/.copilot/mcp-config.json` | — | JSON |
+| `amazonq` | Amazon Q | `~/.aws/amazonq/mcp_config.json` | — | JSON |
+| `warp` | Warp | `~/.warp/mcp_config.json` | — | JSON |
+| `kiro` | Kiro | `~/.kiro/mcp_config.json` | — | JSON |
+| `trae` | Trae | `~/.trae/mcp_config.json` | — | JSON |
+| `crush` | Crush | `~/crush.json` | — | JSON |
+
+`--client` 也认别名（`roocode`、`amazon-q`、`vs-code-insiders` 等）。没有 project 文件的客户端在 `--scope project` 下会被跳过。不带 `--client` 时仍然只写看起来已安装的客户端。
 
 改写是**保形**的:`serde_json` 走一圈会把 VS Code `mcp.json` 里的注释全删掉,所以 JSONC 和 TOML 分别走 `jsonc-parser` 与 `toml_edit`。写入是原子的(临时文件 + rename)、带建议锁,并留一份 0600 的一次性 `.bak`。
 

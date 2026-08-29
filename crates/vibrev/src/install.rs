@@ -1585,7 +1585,7 @@ mod tests {
     use crate::testutil::scratch;
     use camino::Utf8Path;
 
-    /// A fake home with the four client files staged as `(relative path, content)`.
+    /// A fake home with client files staged as `(relative path, content)`.
     fn fixture(tag: &str, files: &[(&str, &str)]) -> (Env, Paths, Utf8PathBuf) {
         let root = scratch(tag);
         let home = root.join("home");
@@ -1855,6 +1855,42 @@ mod tests {
         let body = std::fs::read_to_string(env.cwd.join(".codex/config.toml")).unwrap();
         assert!(body.contains("[mcp_servers.vibrev-jadx]"), "{body}");
         assert!(!env.home.join(".codex/config.toml").exists());
+    }
+
+    #[test]
+    fn windsurf_project_scope_writes_mcp_json() {
+        let (env, paths, _root) = fixture("install-windsurf-project", &[]);
+        let windsurf = client::by_id("windsurf").unwrap();
+        let plan = build(
+            &opts(Kind::Install, Scope::Project),
+            &[windsurf],
+            &[spec("jadx", "/opt/rjadx", &["mcp", "--stdio"])],
+            &env,
+            &paths,
+        )
+        .unwrap();
+        assert_eq!(plan.actions[0].file, env.cwd.join(".windsurf/mcp.json"));
+        apply(&plan, &paths).unwrap();
+        let body = std::fs::read_to_string(env.cwd.join(".windsurf/mcp.json")).unwrap();
+        assert!(body.contains("\"mcpServers\""), "{body}");
+        assert!(body.contains("vibrev-jadx"), "{body}");
+    }
+
+    #[test]
+    fn claude_desktop_is_skipped_for_project_scope() {
+        let (env, paths, _root) = fixture("install-claude-desktop-project", &[]);
+        let desktop = client::by_id("claude-desktop").unwrap();
+        let plan = build(
+            &opts(Kind::Install, Scope::Project),
+            &[desktop],
+            &[spec("jadx", "/opt/rjadx", &[])],
+            &env,
+            &paths,
+        )
+        .unwrap();
+        assert!(plan.actions.is_empty());
+        assert_eq!(plan.skips.len(), 1);
+        assert!(plan.skips[0].reason.contains("没有项目级作用域"));
     }
 
     #[test]

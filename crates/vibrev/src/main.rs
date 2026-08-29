@@ -140,7 +140,7 @@ struct InstallArgs {
     all: bool,
 
     /// 目标客户端，可重复指定；默认为全部已检测到的客户端
-    #[arg(long = "client", value_name = "NAME", value_parser = PossibleValuesParser::new(client::ids()))]
+    #[arg(long = "client", value_name = "NAME", value_parser = PossibleValuesParser::new(client::names()))]
     clients: Vec<String>,
 
     /// 写入哪一级配置：project 是当前目录下的文件，global 是本机全部项目

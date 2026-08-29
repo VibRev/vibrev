@@ -1633,7 +1633,7 @@ fn install_without_an_engine_explains_rather_than_guessing() {
 #[test]
 fn an_unknown_client_is_rejected_by_the_parser() {
     let sb = sandbox("usage-client");
-    let out = sb.vibrev(&["install", "jadx", "--client", "zed"]);
+    let out = sb.vibrev(&["install", "jadx", "--client", "not-a-client"]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("zed"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("not-a-client"), "{}", stderr(&out));
 }

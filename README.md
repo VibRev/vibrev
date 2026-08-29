@@ -65,7 +65,25 @@ The root is `~/.vibrev`, overridable with `VIBREV_HOME`. The installer and the e
 | `claude-code` | Claude Code | `~/.claude.json` | `./.mcp.json` | JSON |
 | `cursor` | Cursor | `~/.cursor/mcp.json` | `./.cursor/mcp.json` | JSON |
 | `vscode` | VS Code | `<config>/Code/User/mcp.json` | `./.vscode/mcp.json` | JSONC |
+| `vscode-insiders` | VS Code Insiders | `<config>/Code - Insiders/User/mcp.json` | `./.vscode/mcp.json` | JSONC |
 | `codex` | Codex | `~/.codex/config.toml` | `./.codex/config.toml` | TOML |
+| `claude-desktop` | Claude Desktop | `<config>/Claude/claude_desktop_config.json` | — | JSON |
+| `windsurf` | Windsurf | `~/.codeium/windsurf/mcp_config.json` | `./.windsurf/mcp.json` | JSON |
+| `zed` | Zed | `<config>/Zed/settings.json` | `./.zed/settings.json` | JSONC |
+| `cline` | Cline | VS Code `globalStorage` | — | JSON |
+| `roo` | Roo Code | VS Code `globalStorage` | — | JSON |
+| `kilo` | Kilo Code | VS Code `globalStorage` | — | JSON |
+| `lmstudio` | LM Studio | `~/.lmstudio/mcp.json` | — | JSON |
+| `gemini` | Gemini CLI | `~/.gemini/settings.json` | — | JSONC |
+| `qwen` | Qwen Coder | `~/.qwen/settings.json` | — | JSONC |
+| `copilot` | Copilot CLI | `~/.copilot/mcp-config.json` | — | JSON |
+| `amazonq` | Amazon Q | `~/.aws/amazonq/mcp_config.json` | — | JSON |
+| `warp` | Warp | `~/.warp/mcp_config.json` | — | JSON |
+| `kiro` | Kiro | `~/.kiro/mcp_config.json` | — | JSON |
+| `trae` | Trae | `~/.trae/mcp_config.json` | — | JSON |
+| `crush` | Crush | `~/crush.json` | — | JSON |
+
+`--client` also accepts aliases (`roocode`, `amazon-q`, `vs-code-insiders`, …). Clients without a project file are skipped under `--scope project`. `install` without `--client` still only writes clients that look installed.
 
 Edits are **format-preserving**: a `serde_json` round-trip would delete every comment in VS Code's `mcp.json`, so the JSONC and TOML paths go through `jsonc-parser` and `toml_edit` instead. Writes are atomic (temp file + rename) under an advisory lock, with a one-time `.bak` at mode 0600.
 

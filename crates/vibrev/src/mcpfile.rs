@@ -899,6 +899,19 @@ mod tests {
     }
 
     #[test]
+    fn zed_writes_context_servers() {
+        let (op, after) = edit(
+            "{}",
+            "zed",
+            &spec("jadx", "/opt/rjadx", &["mcp", "--stdio"]),
+        );
+        assert_eq!(op, Op::Added);
+        assert!(after.contains("\"context_servers\""), "{after}");
+        assert!(after.contains("vibrev-jadx"), "{after}");
+        assert!(!after.contains("mcpServers"), "{after}");
+    }
+
+    #[test]
     fn running_twice_updates_in_place() {
         let s = spec("ida", "/opt/a/ida-headless-mcp", &[]);
         let (op1, once) = edit("{}", "cursor", &s);
