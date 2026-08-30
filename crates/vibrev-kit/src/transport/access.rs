@@ -22,7 +22,7 @@ use crate::transport::bearer;
 type AccessResponse = Response<BoxBody<Bytes, Infallible>>;
 type AccessError = Box<AccessResponse>;
 
-/// Host and bearer checks for one running listener.
+/// Bearer authentication for one running listener.
 #[derive(Clone, Debug)]
 pub struct AccessPolicy {
     bind_addr: SocketAddr,
