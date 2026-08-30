@@ -1,9 +1,7 @@
 //! The one gate every HTTP request passes through.
 
-use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 
 use axum::{
     body::Body as AxumBody,
@@ -14,7 +12,7 @@ use axum::{
 use bytes::Bytes;
 use http::{
     HeaderMap, HeaderValue, Response, StatusCode,
-    header::{HOST, ORIGIN, WWW_AUTHENTICATE},
+    header::{HOST, WWW_AUTHENTICATE},
 };
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 
@@ -24,11 +22,10 @@ use crate::transport::bearer;
 type AccessResponse = Response<BoxBody<Bytes, Infallible>>;
 type AccessError = Box<AccessResponse>;
 
-/// Origin, Host and bearer, in that order, for one running listener.
+/// Host and bearer checks for one running listener.
 #[derive(Clone, Debug)]
 pub struct AccessPolicy {
     bind_addr: SocketAddr,
-    allowed_origins: Arc<HashSet<String>>,
     allowed_hosts: HostAllowList,
     /// Not an `Option`. An absent token set would be an unauthenticated listener
     /// that still type-checks, and the invariant here is that no such listener
@@ -39,13 +36,12 @@ pub struct AccessPolicy {
 impl AccessPolicy {
     pub fn new(
         bind_addr: SocketAddr,
-        allow_origin: &[String],
+        _allow_origin: &[String],
         allow_host: Option<&[String]>,
         auth: Accepted,
     ) -> Self {
         Self {
             bind_addr,
-            allowed_origins: Arc::new(clean_allowlist(allow_origin).into_iter().collect()),
             allowed_hosts: HostAllowList::from_cli(allow_host),
             auth,
         }
@@ -101,15 +97,11 @@ impl AccessPolicy {
     /// multi-user machine, and since the default bind *is* loopback, exempting
     /// it would exempt the default.
     ///
-    /// Order: rebinding checks first, credential second. Both must pass, so the
-    /// order changes only which failure a caller is told about, and this way a
-    /// browser probe from a hostile origin keeps getting the 403 it got before
-    /// the token existed.
+    /// Order: Host check first, credential second. Both must pass.
     pub fn validate(
         &self,
         headers: &HeaderMap,
     ) -> Result<(), Box<Response<BoxBody<Bytes, Infallible>>>> {
-        self.validate_origin(headers)?;
         self.validate_host(headers)?;
         self.validate_bearer(headers)?;
         Ok(())
@@ -124,23 +116,6 @@ impl AccessPolicy {
             );
             Box::new(response)
         })
-    }
-
-    fn validate_origin(&self, headers: &HeaderMap) -> Result<(), AccessError> {
-        let Some(origin) = headers.get(ORIGIN) else {
-            return Ok(());
-        };
-        let origin = origin
-            .to_str()
-            .map_err(|_| access_error(StatusCode::BAD_REQUEST, "Bad Request: invalid Origin"))?;
-        if self.allowed_origins.contains(origin) {
-            return Ok(());
-        }
-
-        Err(access_error(
-            StatusCode::FORBIDDEN,
-            "Forbidden: Origin is not allowed",
-        ))
     }
 
     fn validate_host(&self, headers: &HeaderMap) -> Result<(), AccessError> {
@@ -215,14 +190,6 @@ fn text_response(message_status: StatusCode, message: impl Into<String>) -> Acce
 
 fn access_error(message_status: StatusCode, message: impl Into<String>) -> AccessError {
     Box::new(text_response(message_status, message))
-}
-
-fn clean_allowlist(values: &[String]) -> Vec<String> {
-    values
-        .iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
 }
 
 fn parse_host_header(headers: &HeaderMap) -> Result<NormalizedAuthority, AccessError> {
@@ -477,18 +444,14 @@ mod tests {
     }
 
     #[test]
-    fn the_rebinding_guard_still_answers_first() {
-        // A hostile Origin is a 403 whether or not a credential came with it;
-        // that behaviour predates the token and the integration scripts assert
-        // it.
+    fn origin_is_ignored_when_credential_is_valid() {
         let policy = policy("127.0.0.1:8765", None);
-        let mut hostile = unauthenticated_headers("127.0.0.1:8765");
+        let mut hostile = headers("127.0.0.1:8765");
         hostile.insert(
             http::header::ORIGIN,
             "http://evil.example".parse().expect("valid header"),
         );
-        let response = policy.validate(&hostile).expect_err("hostile origin");
-        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+        assert!(policy.validate(&hostile).is_ok());
     }
 
     #[test]

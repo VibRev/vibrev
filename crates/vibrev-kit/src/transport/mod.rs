@@ -10,7 +10,7 @@
 //! right for their engine, so a shared `Frontend::Stdio` would be a third shape
 //! nobody uses. What *is* duplicated — and what a second engine would otherwise
 //! have to reinvent, correctly, before it could listen on a port — is here:
-//! bind, credential, `Origin`/`Host`, the startup banner, and graceful shutdown.
+//! bind, credential, `Host`, the startup banner, and graceful shutdown.
 //!
 //! # There is no way to serve unauthenticated
 //!
@@ -50,7 +50,7 @@ use crate::token;
 /// Where a listener binds when nobody said otherwise. Loopback, deliberately.
 pub const DEFAULT_BIND: &str = "127.0.0.1:8765";
 
-/// `Origin` values accepted out of the box.
+/// Legacy default retained for CLI/config compatibility. Origin is not checked.
 pub const DEFAULT_ALLOW_ORIGIN: &str = "http://localhost,http://127.0.0.1";
 
 /// SSE keep-alive, in seconds. `0` disables.
@@ -135,6 +135,7 @@ pub struct HttpOptions {
     pub bind: SocketAddr,
     /// `None` resolves to [`token::default_path`] at bind time.
     pub token_file: Option<PathBuf>,
+    /// Legacy option retained for CLI/config compatibility. Origin is not checked.
     pub allow_origin: Vec<String>,
     /// `None` is "the bind-derived hosts only". `Some(["*"])` or `Some([""])`
     /// disables the check — the difference between "not configured" and
@@ -195,7 +196,7 @@ impl HttpOptions {
                 .value_delimiter(',')
                 .action(ArgAction::Append)
                 .default_value(DEFAULT_ALLOW_ORIGIN)
-                .help("Allowed Origin values (comma-separated). localhost only by default"),
+                .help("Legacy compatibility option; Origin headers are not validated"),
             Arg::new(ALLOW_HOST_ARG)
                 .long("allow-host")
                 .value_name("HOST")

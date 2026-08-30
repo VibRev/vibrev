@@ -142,7 +142,7 @@ crate 根上还有:`ToolOutcome`、`Rendered<T>`(既保住 `structuredContent`,�
 vibrev-kit = { version = "0.0.1", features = ["http"] }
 ```
 
-`Listener::serve` 接收引擎的 `axum::Router`,把闸门 layer 在**整个** router 上。引擎从来没有机会说哪些路由豁免,`AccessPolicy.auth` 也不是 `Option`。**没有办法起一个不鉴权的监听面。** 检查顺序是 Origin → Host → bearer;凭据失败回 401 + `WWW-Authenticate`,策略失败回 403。
+`Listener::serve` 接收引擎的 `axum::Router`,把闸门 layer 在**整个** router 上。引擎从来没有机会说哪些路由豁免,`AccessPolicy.auth` 也不是 `Option`。**没有办法起一个不鉴权的监听面。** Origin 请求头不再校验；启用 Host 校验时先检查 Host,再检查 bearer。凭据失败回 401 + `WWW-Authenticate`,策略失败回 403。
 
 ## `vibrev-tool-macros`
 
