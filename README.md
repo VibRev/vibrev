@@ -142,7 +142,7 @@ Off by default. A stdio-only engine — and the installer, which speaks no proto
 vibrev-kit = { version = "0.0.1", features = ["http"] }
 ```
 
-`Listener::serve` takes the engine's `axum::Router` and layers the gate over *all* of it. The engine never gets to say which routes are exempt, and `AccessPolicy.auth` is not an `Option`. **There is no way to serve unauthenticated.** Origin headers are accepted without validation; Host validation (when enabled) runs before bearer authentication. Credential failures get 401 with `WWW-Authenticate`, policy failures get 403.
+`Listener::serve` takes the engine's `axum::Router` and layers the bearer gate over *all* of it. The engine never gets to say which routes are exempt, and `AccessPolicy.auth` is not an `Option`. **There is no way to serve unauthenticated.** Credential failures get 401 with `WWW-Authenticate`.
 
 ## `vibrev-tool-macros`
 
