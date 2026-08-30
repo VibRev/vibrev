@@ -34,12 +34,7 @@ pub struct AccessPolicy {
 }
 
 impl AccessPolicy {
-    pub fn new(
-        bind_addr: SocketAddr,
-        _allow_origin: &[String],
-        allow_host: Option<&[String]>,
-        auth: Accepted,
-    ) -> Self {
+    pub fn new(bind_addr: SocketAddr, allow_host: Option<&[String]>, auth: Accepted) -> Self {
         Self {
             bind_addr,
             allowed_hosts: HostAllowList::from_cli(allow_host),
@@ -316,7 +311,7 @@ mod tests {
             Some(PathBuf::from("/home/tester/.vibrev/token")),
         )
         .expect("token set");
-        AccessPolicy::new(bind_addr, &[], hosts.as_deref(), auth)
+        AccessPolicy::new(bind_addr, hosts.as_deref(), auth)
     }
 
     /// Host header plus a valid credential, so the Host assertions below keep

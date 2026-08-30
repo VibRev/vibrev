@@ -50,9 +50,6 @@ use crate::token;
 /// Where a listener binds when nobody said otherwise. Loopback, deliberately.
 pub const DEFAULT_BIND: &str = "127.0.0.1:8765";
 
-/// Legacy default retained for CLI/config compatibility. Origin is not checked.
-pub const DEFAULT_ALLOW_ORIGIN: &str = "http://localhost,http://127.0.0.1";
-
 /// SSE keep-alive, in seconds. `0` disables.
 pub const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
 
@@ -80,7 +77,6 @@ const BYTES_PER_MIB: usize = 1024 * 1024;
 
 pub const BIND_ARG: &str = "__vibrev_bind";
 pub const TOKEN_FILE_ARG: &str = "__vibrev_token_file";
-pub const ALLOW_ORIGIN_ARG: &str = "__vibrev_allow_origin";
 pub const ALLOW_HOST_ARG: &str = "__vibrev_allow_host";
 pub const SSE_KEEP_ALIVE_ARG: &str = "__vibrev_sse_keep_alive_secs";
 pub const SESSION_KEEP_ALIVE_ARG: &str = "__vibrev_session_keep_alive_secs";
@@ -135,8 +131,6 @@ pub struct HttpOptions {
     pub bind: SocketAddr,
     /// `None` resolves to [`token::default_path`] at bind time.
     pub token_file: Option<PathBuf>,
-    /// Legacy option retained for CLI/config compatibility. Origin is not checked.
-    pub allow_origin: Vec<String>,
     /// `None` is "the bind-derived hosts only". `Some(["*"])` or `Some([""])`
     /// disables the check — the difference between "not configured" and
     /// "configured to allow everything" is one a listener has to keep.
@@ -153,7 +147,6 @@ impl Default for HttpOptions {
         Self {
             bind: DEFAULT_BIND.parse().expect("the default bind is a literal"),
             token_file: None,
-            allow_origin: DEFAULT_ALLOW_ORIGIN.split(',').map(str::to_owned).collect(),
             allow_host: None,
             sse_keep_alive_secs: DEFAULT_SSE_KEEP_ALIVE_SECS,
             session_keep_alive_secs: DEFAULT_SESSION_KEEP_ALIVE_SECS,
@@ -190,13 +183,6 @@ impl HttpOptions {
                     "Shared bearer token file. Defaults to $VIBREV_HOME/token, otherwise ~/.vibrev/token; \
                      created at mode 0600 on first use and reused thereafter. There is no switch that turns the token off",
                 ),
-            Arg::new(ALLOW_ORIGIN_ARG)
-                .long("allow-origin")
-                .value_name("ORIGIN")
-                .value_delimiter(',')
-                .action(ArgAction::Append)
-                .default_value(DEFAULT_ALLOW_ORIGIN)
-                .help("Legacy compatibility option; Origin headers are not validated"),
             Arg::new(ALLOW_HOST_ARG)
                 .long("allow-host")
                 .value_name("HOST")
@@ -268,7 +254,6 @@ impl HttpOptions {
                 .ok()
                 .flatten()
                 .cloned(),
-            allow_origin: many(matches, ALLOW_ORIGIN_ARG).unwrap_or(defaults.allow_origin),
             // `None` and `Some(vec![])` are different answers here, so this one
             // is not defaulted: see `HttpOptions::allow_host`.
             allow_host: many(matches, ALLOW_HOST_ARG),
@@ -372,7 +357,7 @@ impl Listener {
             // The *resolved* address, not the requested one: `--bind :0` is a
             // real thing to do in a test, and a Host allowlist derived from port
             // zero would reject every request.
-            access: AccessPolicy::new(addr, &opts.allow_origin, opts.allow_host.as_deref(), auth),
+            access: AccessPolicy::new(addr, opts.allow_host.as_deref(), auth),
             config: streamable_config(opts, cancel.clone()),
             cancel,
             token_path,
@@ -677,12 +662,7 @@ mod tests {
             Some(PathBuf::from("/home/tester/.vibrev/token")),
         )
         .expect("token set");
-        AccessPolicy::new(
-            opts.bind,
-            &opts.allow_origin,
-            opts.allow_host.as_deref(),
-            auth,
-        )
+        AccessPolicy::new(opts.bind, opts.allow_host.as_deref(), auth)
     }
 
     fn exposure() -> Exposure {
@@ -700,7 +680,6 @@ mod tests {
     fn the_defaults_are_the_ones_documented() {
         let opts = parse(&[]);
         assert_eq!(opts.bind.to_string(), DEFAULT_BIND);
-        assert_eq!(opts.allow_origin, ["http://localhost", "http://127.0.0.1"]);
         assert_eq!(opts.allow_host, None);
         assert_eq!(opts.sse_keep_alive_secs, 15);
         assert_eq!(opts.session_keep_alive_secs, 1800);
@@ -733,8 +712,6 @@ mod tests {
             "0.0.0.0:9001",
             "--token-file",
             "/tmp/t",
-            "--allow-origin",
-            "http://a,http://b",
             "--sse-keep-alive-secs",
             "0",
             "--session-keep-alive-secs",
@@ -746,7 +723,6 @@ mod tests {
         ]);
         assert_eq!(opts.bind.to_string(), "0.0.0.0:9001");
         assert_eq!(opts.token_file, Some(PathBuf::from("/tmp/t")));
-        assert_eq!(opts.allow_origin, ["http://a", "http://b"]);
         assert_eq!(opts.sse_keep_alive_secs, 0);
         assert_eq!(opts.session_keep_alive_secs, 60);
         assert!(opts.stateless);
