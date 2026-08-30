@@ -10,7 +10,7 @@
 //! right for their engine, so a shared `Frontend::Stdio` would be a third shape
 //! nobody uses. What *is* duplicated — and what a second engine would otherwise
 //! have to reinvent, correctly, before it could listen on a port — is here:
-//! bind, credential, `Host`, the startup banner, and graceful shutdown.
+//! bind, credential, the startup banner, and graceful shutdown.
 //!
 //! # There is no way to serve unauthenticated
 //!
@@ -513,12 +513,6 @@ pub fn banner(access: &AccessPolicy, exposure: &Exposure, reveal_token: bool) ->
             "   WARNING: --bind {addr} is not loopback; this port is reachable"
         ));
         lines.push("            from other hosts on the network.".to_string());
-    }
-    if access.host_check_disabled() {
-        lines.push(
-            "   WARNING: Host validation is disabled (--allow-host '*' or empty),".to_string(),
-        );
-        lines.push("            which removes the DNS-rebinding mitigation.".to_string());
     }
     lines.push(String::new());
     lines.push(" Client config (MCP Streamable HTTP):".to_string());

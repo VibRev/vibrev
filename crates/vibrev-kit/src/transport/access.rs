@@ -97,7 +97,6 @@ impl AccessPolicy {
         &self,
         headers: &HeaderMap,
     ) -> Result<(), Box<Response<BoxBody<Bytes, Infallible>>>> {
-        self.validate_host(headers)?;
         self.validate_bearer(headers)?;
         Ok(())
     }
